@@ -158,7 +158,6 @@ async def _collect_features(
         "geoip_header_configured": settings.geoip_country_header is not None,
         "geoip_maxmind_configured": settings.geoip_maxmind_db_path is not None,
         "rate_limit_enabled": settings.rate_limit_enabled,
-        "compliance_ee": edition_name() == "ee",
     }
 
 
