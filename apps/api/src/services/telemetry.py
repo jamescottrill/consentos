@@ -12,7 +12,7 @@ What is **never** collected:
 
 What **is** collected:
 - a stable anonymous instance UUID generated locally on first boot
-- ConsentOS version, edition (CE/EE), Python version, deployment kind
+- ConsentOS version, edition label, Python version, deployment kind
 - bucketed counts of orgs/sites/users/scans/consents
 - feature flags (TCF, auto-blocking, GeoIP configured, etc.)
 - Postgres major version
