@@ -123,6 +123,8 @@ export interface SiteConfig {
   category_tcf_purposes?: Record<string, number[]>;
   /** Bridge origin for cross-domain consent (e.g. ``https://cmp.consentos.dev``). */
   consent_bridge_url?: string | null;
+  /** Visitor region resolved by the API from GeoIP (e.g. ``US-CA``). */
+  detected_region?: string | null;
   /**
    * Banner translation strings keyed by locale (e.g.
    * ``{ de: { title: 'Wir verwenden Cookies', … } }``), embedded in the

@@ -22,6 +22,9 @@ import { isImplicitConsentMode } from './blocking-mode';
 import { buildConsentState, readConsent, writeConsent, writeTcfCookie } from './consent';
 import { renderCookiesWidget } from './cookies-widget';
 import { buildGcmStateFromCategories, updateGcm } from './gcm';
+import { type GpcResult, evaluateGpc, getVisitorRegion } from './gpc';
+import { installGppApi, isGppApiInstalled, setGppDisplayStatus, updateGppConsent } from './gpp-api';
+import { buildGppFromConsent } from './gpp-consent';
 import { escapeHtml, isValidColour, isValidFontFamily } from './html';
 import { type TranslationStrings, DEFAULT_TRANSLATIONS, detectLocale, interpolate, renderLinks, selectTranslations } from './i18n';
 import {
@@ -30,6 +33,8 @@ import {
   setTcfDisplayStatus,
   updateTcfConsent,
 } from './tcf';
+import { needsReconsent } from './reconsent';
+import { updateShopifyConsent } from './shopify';
 import type { TCModel } from './tcf';
 import type { BannerConfig, ButtonConfig, CategorySlug, ConsentState, SiteConfig } from './types';
 
@@ -73,46 +78,22 @@ interface ABAssignment {
   variant: { name: string };
 }
 
-/** Result from GPC evaluation. */
-interface GpcResult {
-  detected: boolean;
-  honoured: boolean;
-}
-
 /** EE hooks that enterprise code can override at runtime. */
 interface EEHooks {
   applyABTest: (config: SiteConfig, visitorId: string) => { config: SiteConfig; assignment: ABAssignment | null };
-  needsReconsent: (consent: unknown, config: SiteConfig) => { required: boolean; reasons: string[] };
-  evaluateGpc: (config: SiteConfig, region: string | null) => GpcResult;
-  getVisitorRegion: () => string | null;
-  installGppApi: (cmpId: number, supportedApis: string[]) => void;
-  setGppDisplayStatus: (status: string) => void;
-  isGppApiInstalled: () => boolean;
-  updateGppConsent: (gpp: unknown) => string | undefined;
-  buildGppFromConsent: ((accepted: CategorySlug[], config: SiteConfig) => unknown) | null;
   identifyUser: (jwt: string, config: SiteConfig) => Promise<string[]>;
   clearIdentity: () => void;
   isIdentified: () => boolean;
   pushConsentToServer: (accepted: CategorySlug[], rejected: CategorySlug[], tc?: string, gpp?: string, gcm?: Record<string, string>) => void;
-  updateShopifyConsent: (accepted: CategorySlug[]) => void;
 }
 
 /** Default no-op hooks for CE mode. */
 const _hooks: EEHooks = {
   applyABTest: (config) => ({ config, assignment: null }),
-  needsReconsent: () => ({ required: false, reasons: [] }),
-  evaluateGpc: () => ({ detected: false, honoured: false }),
-  getVisitorRegion: () => null,
-  installGppApi: () => {},
-  setGppDisplayStatus: () => {},
-  isGppApiInstalled: () => false,
-  updateGppConsent: () => undefined,
-  buildGppFromConsent: null,
   identifyUser: async () => [],
   clearIdentity: () => {},
   isIdentified: () => false,
   pushConsentToServer: () => {},
-  updateShopifyConsent: () => {},
 };
 
 /**
@@ -256,7 +237,7 @@ async function init(): Promise<void> {
   // giving consent).
   let reconsentRequired = false;
   if (existingConsent) {
-    const reconsent = _hooks.needsReconsent(existingConsent, config);
+    const reconsent = needsReconsent(existingConsent, config);
     reconsentRequired = reconsent.required;
     if (reconsent.required) {
       console.info('[ConsentOS] Re-consent required:', reconsent.reasons.join(', '));
@@ -265,8 +246,8 @@ async function init(): Promise<void> {
 
   // Install GPP API if enabled
   if (config.gpp_enabled) {
-    _hooks.installGppApi(0, config.gpp_supported_apis ?? []);
-    _hooks.setGppDisplayStatus('visible');
+    installGppApi(0, config.gpp_supported_apis ?? []);
+    setGppDisplayStatus('visible');
   }
 
   // Install __tcfapi (locator iframe + postMessage proxy + global)
@@ -277,9 +258,9 @@ async function init(): Promise<void> {
     installTcfApi(PLACEHOLDER_CMP_ID, CMP_VERSION);
   }
 
-  // Evaluate GPC signal
-  const visitorRegion = _hooks.getVisitorRegion();
-  const gpcResult = _hooks.evaluateGpc(config, visitorRegion);
+  // Evaluate GPC signal against the region the API resolved for this visitor
+  const visitorRegion = config.detected_region ?? getVisitorRegion();
+  const gpcResult = evaluateGpc(config, visitorRegion);
 
   if (gpcResult.detected) {
     console.info(`[ConsentOS] GPC signal detected (honoured: ${gpcResult.honoured})`);
@@ -365,7 +346,9 @@ async function init(): Promise<void> {
       if (config.gcm_enabled) {
         updateGcm(gcmState);
       }
-      writeConsent(bridgeConsent, config.consent_expiry_days);
+      // Stamp this site's config version, or re-consent would treat the
+      // other site's version as a change and show the banner again.
+      writeConsent({ ...bridgeConsent, configVersion: config.id }, config.consent_expiry_days);
       dispatchConsentEvent(bridgeConsent.accepted);
       showPreferencesButton(config, t);
       return;
@@ -714,10 +697,10 @@ function handleConsent(
 
   // Generate GPP string if GPP is enabled
   let gppString: string | undefined;
-  if (config.gpp_enabled && _hooks.isGppApiInstalled() && _hooks.buildGppFromConsent) {
-    const gpp = _hooks.buildGppFromConsent(accepted, config);
-    gppString = _hooks.updateGppConsent(gpp);
-    _hooks.setGppDisplayStatus('hidden');
+  if (config.gpp_enabled && isGppApiInstalled()) {
+    const gpp = buildGppFromConsent(accepted, config.gpp_supported_apis ?? [], gpcResult?.detected ?? false);
+    gppString = updateGppConsent(gpp);
+    setGppDisplayStatus('hidden');
   }
 
   // Generate TCF v2.3 TC string + emit ``useractioncomplete`` event
@@ -765,7 +748,7 @@ function handleConsent(
 
   // Update Shopify Customer Privacy API
   if (config.shopify_privacy_enabled) {
-    _hooks.updateShopifyConsent(accepted);
+    updateShopifyConsent(accepted);
   }
 
   // Post consent to API (fire and forget)
@@ -782,6 +765,7 @@ function handleConsent(
       gcm_state: gcmState,
       gpc_detected: gpcResult?.detected ?? false,
       gpc_honoured: gpcResult?.honoured ?? false,
+      gpp_string: gppString ?? null,
       page_url: window.location.href,
       ab_test_id: abAssignment?.abTestId ?? null,
       ab_variant_id: abAssignment?.variantId ?? null,
