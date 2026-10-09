@@ -33,7 +33,6 @@ const baseConfig: SiteConfig = {
   terms_url: null,
   consent_expiry_days: 365,
   consent_group_id: null,
-  ab_test: null,
   initiator_map: null,
 };
 
