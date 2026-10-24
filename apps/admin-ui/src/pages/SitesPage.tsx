@@ -7,6 +7,7 @@ import { listInstallations } from '../api/installation';
 import { listSetupSummaries } from '../api/setup';
 import { listSites, updateSite } from '../api/sites';
 import CreateSiteModal, { CreateSiteForm } from '../components/CreateSiteModal';
+import SetupGuideLink from '../components/SetupGuideLink';
 import { Card } from '../components/ui/card.tsx';
 import { InstallationBadge } from '../components/InstallationStatus';
 import { Button } from '../components/ui/button.tsx';
@@ -121,6 +122,7 @@ export default function SitesPage() {
             setting up its banner.
           </p>
           <CreateSiteForm />
+          <SetupGuideLink className="mt-4 inline-block" />
         </Card>
       )}
 

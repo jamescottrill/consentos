@@ -1,10 +1,10 @@
 /**
  * UI extension registry.
  *
- * Lets an extension add tabs, pages and navigation items to the admin UI
- * without core knowing anything about it. With no extension installed
- * the registry is empty and the UI renders only the built-in tabs and
- * pages.
+ * Lets an extension add tabs, pages, navigation items and a setup guide
+ * link to the admin UI without core knowing anything about it. With no
+ * extension installed the registry is empty and the UI renders only the
+ * built-in tabs and pages.
  */
 
 import type { ComponentType } from 'react';
@@ -85,6 +85,17 @@ export interface AuthUiProvider {
   LoginComponent: ComponentType<{ unprovisioned?: boolean }>;
 }
 
+/**
+ * A guide for setting up a site, linked from the setup checklist and the
+ * first-site step. Without one, neither shows a guide link.
+ */
+export interface SetupGuide {
+  /** Link text (e.g. ``"Read the getting-started guide"``). */
+  label: string;
+  /** Absolute URL of the guide, opened in a new tab. */
+  href: string;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Internal state                                                     */
 /* ------------------------------------------------------------------ */
@@ -93,6 +104,7 @@ const _tabs: TabExtension[] = [];
 const _pages: PageExtension[] = [];
 const _navItems: NavExtension[] = [];
 let _authProvider: AuthUiProvider | null = null;
+let _setupGuide: SetupGuide | null = null;
 
 /* ------------------------------------------------------------------ */
 /*  Registration API                                                   */
@@ -127,6 +139,14 @@ export function registerAuthUiProvider(provider: AuthUiProvider): void {
   _authProvider = provider;
 }
 
+/** Register the setup guide. Only one may be registered. */
+export function registerSetupGuide(guide: SetupGuide): void {
+  if (_setupGuide !== null) {
+    throw new Error('A setup guide is already registered; only one is allowed.');
+  }
+  _setupGuide = guide;
+}
+
 /**
  * Register a destination for admin UI analytics events.
  *
@@ -157,6 +177,11 @@ export function getNavItems(): readonly NavExtension[] {
 /** Return the registered auth provider, or null for the default flow. */
 export function getAuthUiProvider(): AuthUiProvider | null {
   return _authProvider;
+}
+
+/** Return the registered setup guide, or null when there is none. */
+export function getSetupGuide(): SetupGuide | null {
+  return _setupGuide;
 }
 
 /* ------------------------------------------------------------------ */

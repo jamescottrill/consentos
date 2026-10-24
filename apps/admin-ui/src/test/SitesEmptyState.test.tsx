@@ -18,6 +18,8 @@ vi.mock('../api/site-groups', () => ({
   createSiteGroup: vi.fn(),
   deleteSiteGroup: vi.fn(),
 }));
+const mockGetSetupGuide = vi.fn<() => { label: string; href: string } | null>(() => null);
+vi.mock('../extensions/registry', () => ({ getSetupGuide: () => mockGetSetupGuide() }));
 vi.mock('../api/installation', () => ({ listInstallations: () => Promise.resolve([]) }));
 vi.mock('../api/setup', () => ({ listSetupSummaries: () => Promise.resolve([]) }));
 vi.mock('react-router-dom', async () => {
@@ -48,5 +50,22 @@ describe('adding the first site', () => {
 
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/sites/new-site'));
     expect(mockCreateSite).toHaveBeenCalledWith(expect.objectContaining({ domain: 'shop.example' }));
+  });
+
+  it('links to the setup guide when one is registered', async () => {
+    mockGetSetupGuide.mockReturnValue({ label: 'Read the guide', href: 'https://example.com/guide' });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SitesPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('link', { name: 'Read the guide' })).toHaveAttribute(
+      'href',
+      'https://example.com/guide',
+    );
   });
 });

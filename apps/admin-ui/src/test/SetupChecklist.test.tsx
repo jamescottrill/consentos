@@ -25,6 +25,8 @@ vi.mock('../api/setup', () => ({
   confirmBanner: (siteId: string) => mockConfirmBanner(siteId),
   dismissSetup: (siteId: string) => mockDismissSetup(siteId),
 }));
+const mockGetSetupGuide = vi.fn<() => { label: string; href: string } | null>(() => null);
+vi.mock('../extensions/registry', () => ({ getSetupGuide: () => mockGetSetupGuide() }));
 vi.mock('../api/scanner', () => ({ triggerScan: () => mockTriggerScan() }));
 vi.mock('../components/InstallGuide', () => ({ default: () => <p>Install guide</p> }));
 vi.mock('../components/InstallationStatus', () => ({ default: () => <p>Installation status</p> }));
@@ -79,6 +81,7 @@ function renderChecklist() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetSetupGuide.mockReturnValue(null);
   asRole('owner');
 });
 
@@ -96,6 +99,24 @@ describe('setupPollInterval', () => {
 });
 
 describe('SetupChecklist', () => {
+  it('links to the setup guide when one is registered', async () => {
+    mockGetSetupGuide.mockReturnValue({ label: 'Read the guide', href: 'https://example.com/guide' });
+    mockGetSiteSetup.mockResolvedValue(setup({}));
+    renderChecklist();
+
+    const link = await screen.findByRole('link', { name: 'Read the guide' });
+    expect(link).toHaveAttribute('href', 'https://example.com/guide');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('shows no guide link without one', async () => {
+    mockGetSiteSetup.mockResolvedValue(setup({}));
+    renderChecklist();
+
+    expect(await screen.findByText('Set up your site')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
   it('lists every step in order with its status', async () => {
     mockGetSiteSetup.mockResolvedValue(setup({ scan: 'in_progress' }));
     renderChecklist();

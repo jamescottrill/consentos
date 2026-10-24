@@ -12,6 +12,7 @@ import InstallationStatus from './InstallationStatus';
 import InstallGuide from './InstallGuide';
 import { canEdit, canPublish } from './permissions';
 import PublishDialog from './PublishDialog';
+import SetupGuideLink from './SetupGuideLink';
 import { Alert } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -57,6 +58,7 @@ export default function SetupChecklist({ site }: Props) {
           <p className="text-xs text-text-secondary">
             {setup.done} of {setup.total} steps done
           </p>
+          <SetupGuideLink />
         </div>
         {setup.complete && (
           <Button variant="secondary" onClick={() => dismiss.mutate()} disabled={dismiss.isPending}>

@@ -108,6 +108,26 @@ describe('UI extension registry', () => {
     });
   });
 
+  describe('registerSetupGuide', () => {
+    it('has no guide until one is registered', () => {
+      expect(registry.getSetupGuide()).toBeNull();
+    });
+
+    it('returns the registered guide', () => {
+      registry.registerSetupGuide({ label: 'Guide', href: 'https://example.com/guide' });
+
+      expect(registry.getSetupGuide()).toEqual({ label: 'Guide', href: 'https://example.com/guide' });
+    });
+
+    it('allows only one guide', () => {
+      registry.registerSetupGuide({ label: 'Guide', href: 'https://example.com/guide' });
+
+      expect(() =>
+        registry.registerSetupGuide({ label: 'Other', href: 'https://example.com/other' }),
+      ).toThrow();
+    });
+  });
+
   describe('registerAnalyticsSink', () => {
     it('routes admin UI analytics events to the registered sink', async () => {
       const analytics = await import('../services/analytics');
