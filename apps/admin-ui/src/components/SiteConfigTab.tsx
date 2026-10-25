@@ -26,8 +26,8 @@ const GPP_SECTIONS = [
   { value: 'usca', label: 'US California — CCPA/CPRA (Section 8)' },
   { value: 'usva', label: 'US Virginia — VCDPA (Section 9)' },
   { value: 'usco', label: 'US Colorado — CPA (Section 10)' },
-  { value: 'usct', label: 'US Connecticut — CTDPA (Section 11)' },
-  { value: 'usfl', label: 'US Florida — FDBR (Section 14)' },
+  { value: 'usct', label: 'US Connecticut — CTDPA (Section 12)' },
+  { value: 'usfl', label: 'US Florida — FDBR (Section 13)' },
 ];
 
 const GPC_JURISDICTIONS = [

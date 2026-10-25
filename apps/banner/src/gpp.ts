@@ -342,9 +342,9 @@ export const US_COLORADO: SectionDef = {
   hasGpcSubsection: true,
 };
 
-/** US Connecticut Privacy section (Section 11, usct v1). */
+/** US Connecticut Privacy section (Section 12, usct v1). */
 export const US_CONNECTICUT: SectionDef = {
-  id: 11,
+  id: 12,
   apiPrefix: 'usct',
   version: 1,
   coreFields: [
@@ -363,9 +363,9 @@ export const US_CONNECTICUT: SectionDef = {
   hasGpcSubsection: true,
 };
 
-/** US Florida Privacy section (Section 14, usfl v1). */
+/** US Florida Privacy section (Section 13, usfl v1). Has no GPC sub-section. */
 export const US_FLORIDA: SectionDef = {
-  id: 14,
+  id: 13,
   apiPrefix: 'usfl',
   version: 1,
   coreFields: [
@@ -382,7 +382,7 @@ export const US_FLORIDA: SectionDef = {
     field('MspaOptOutOptionMode', 2),
     field('MspaServiceProviderMode', 2),
   ],
-  hasGpcSubsection: true,
+  hasGpcSubsection: false,
 };
 
 /** Registry of all known section definitions, keyed by section ID. */

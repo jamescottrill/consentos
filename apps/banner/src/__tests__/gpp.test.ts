@@ -428,7 +428,7 @@ describe('US Colorado section (Section 10)', () => {
   });
 });
 
-describe('US Connecticut section (Section 11)', () => {
+describe('US Connecticut section (Section 12)', () => {
   it('encodes and decodes default data', () => {
     const data = createDefaultSectionData(US_CONNECTICUT);
     const encoded = encodeSectionCore(US_CONNECTICUT, data);
@@ -460,7 +460,7 @@ describe('US Connecticut section (Section 11)', () => {
   });
 });
 
-describe('US Florida section (Section 14)', () => {
+describe('US Florida section (Section 13)', () => {
   it('encodes and decodes default data', () => {
     const data = createDefaultSectionData(US_FLORIDA);
     const encoded = encodeSectionCore(US_FLORIDA, data);
@@ -494,7 +494,13 @@ describe('US Florida section (Section 14)', () => {
   });
 
   it('supports GPC sub-section', () => {
-    expect(US_FLORIDA.hasGpcSubsection).toBe(true);
+    expect(US_FLORIDA.hasGpcSubsection).toBe(false);
+  });
+
+  // Section IDs from the IAB reference library: 11 is Utah, 14 Montana.
+  it('uses the IAB section IDs for Connecticut and Florida', () => {
+    expect(US_CONNECTICUT.id).toBe(12);
+    expect(US_FLORIDA.id).toBe(13);
   });
 });
 
@@ -651,7 +657,7 @@ describe('full GPP string encoding/decoding', () => {
     const gpp: GppString = {
       header: {
         version: 1,
-        sectionIds: [7, 8, 9, 10, 11, 14],
+        sectionIds: [7, 8, 9, 10, 12, 13],
         applicableSections: [7, 8],
       },
       sections: new Map([
@@ -688,13 +694,12 @@ describe('full GPP string encoding/decoding', () => {
           data: createDefaultSectionData(US_COLORADO),
           gpcSubsection: { gpc: false },
         }],
-        [11, {
+        [12, {
           data: createDefaultSectionData(US_CONNECTICUT),
           gpcSubsection: { gpc: false },
         }],
-        [14, {
+        [13, {
           data: createDefaultSectionData(US_FLORIDA),
-          gpcSubsection: { gpc: true },
         }],
       ]),
     };
@@ -838,8 +843,8 @@ describe('section registry', () => {
     expect(SECTION_REGISTRY.has(8)).toBe(true);  // US California
     expect(SECTION_REGISTRY.has(9)).toBe(true);  // US Virginia
     expect(SECTION_REGISTRY.has(10)).toBe(true); // US Colorado
-    expect(SECTION_REGISTRY.has(11)).toBe(true); // US Connecticut
-    expect(SECTION_REGISTRY.has(14)).toBe(true); // US Florida
+    expect(SECTION_REGISTRY.has(12)).toBe(true); // US Connecticut
+    expect(SECTION_REGISTRY.has(13)).toBe(true); // US Florida
   });
 
   it('each section has a unique apiPrefix', () => {
@@ -899,7 +904,7 @@ describe('edge cases', () => {
   });
 
   it('handles a GPP string with all 6 registered sections', () => {
-    const allSectionIds = [7, 8, 9, 10, 11, 14];
+    const allSectionIds = [7, 8, 9, 10, 12, 13];
     const sections = new Map<number, { data: SectionData; gpcSubsection?: { gpc: boolean } }>();
 
     for (const id of allSectionIds) {
