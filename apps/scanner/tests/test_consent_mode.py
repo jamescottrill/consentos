@@ -112,17 +112,17 @@ class TestDefaults:
         assert found["before_consent.gcm_denied"].status == "inconclusive"
         assert found["before_consent.gcm_wait"].status == "inconclusive"
 
-    def test_default_after_a_google_tag_fails(self):
-        tag = {"url": "https://www.googletagmanager.com/gtag/js?id=G-1", "t": 0.5}
-        check = checks(b=before(google_tag_loads=[tag]))["before_consent.gcm_default"]
+    def test_default_after_a_google_tag_starts_fails(self):
+        tag = {"command": "tag", "name": "gtm.js", "t": 0.5}
+        check = checks(b=before(consent_commands=[tag, default()]))["before_consent.gcm_default"]
         assert check.status == "failed"
+        assert check.evidence == {"started": ["gtm.js"]}
         assert "Move the ConsentOS script above" in check.fix
 
     def test_google_tag_after_the_default_passes(self):
-        tag = {"url": "https://www.googletagmanager.com/gtag/js?id=G-1", "t": 5.0}
-        assert checks(b=before(google_tag_loads=[tag]))["before_consent.gcm_default"].status == (
-            "passed"
-        )
+        tag = {"command": "tag", "name": "config", "t": 5.0}
+        b = before(consent_commands=[default(), tag])
+        assert checks(b=b)["before_consent.gcm_default"].status == "passed"
 
     def test_granted_default_fails(self):
         state = {**DENIED, "analytics_storage": "granted"}
@@ -174,6 +174,10 @@ class TestReject:
         assert checks(r=reject(consent_commands=[]))["after_reject.gcm_denied"].status == (
             "inconclusive"
         )
+
+    def test_tags_starting_are_not_consent_commands(self):
+        r = reject(consent_commands=[{"command": "tag", "name": "js", "t": 1.0}])
+        assert checks(r=r)["after_reject.gcm_denied"].status == "inconclusive"
 
 
 class TestReceived:

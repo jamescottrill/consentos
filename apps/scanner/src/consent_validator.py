@@ -76,21 +76,25 @@ _REJECT_SELECTORS = (
     "button:has-text('Reject')",
 )
 
-# Installed before any page script runs, so Consent Mode commands are
-# recorded even when the site replaces ``dataLayer`` or its ``push``, as
-# Google Tag Manager does.
+# Installed before any page script runs, so Consent Mode commands, and
+# Google tags starting up, are recorded in order even when the site
+# replaces ``dataLayer`` or its ``push``, as Google Tag Manager does.
 RECORDER_SCRIPT = """
 (() => {
   const log = [];
   window.__consentosCheck = { consent: log };
   const record = (item) => {
     try {
-      if (item && item[0] === 'consent') {
+      if (!item) return;
+      if (item[0] === 'consent') {
         log.push({
           command: String(item[1]),
           state: JSON.parse(JSON.stringify(item[2] || {})),
           t: performance.now(),
         });
+      } else if (item[0] === 'js' || item[0] === 'config' || item.event === 'gtm.js') {
+        // A Google tag or Tag Manager starting up.
+        log.push({ command: 'tag', name: item.event || String(item[0]), t: performance.now() });
       }
     } catch (e) {}
   };
@@ -141,13 +145,8 @@ async () => {
         data: await withTimeout(new Promise((resolve) => window.__gpp('getGPPData', resolve))),
       }
     : null;
-  const googleTag = new RegExp(
-    'googletagmanager\\.com/(gtag/js|gtm\\.js)|google-analytics\\.com/(analytics|ga)\\.js');
   return {
     consent: (window.__consentosCheck && window.__consentosCheck.consent) || [],
-    googleTags: performance.getEntriesByType('resource')
-      .filter((e) => googleTag.test(e.name))
-      .map((e) => ({ url: e.name, t: e.startTime })),
     tcf,
     gpp,
   };
@@ -179,6 +178,24 @@ def carries_consent_state(url: str) -> bool:
     cookieless requests before consent.
     """
     return "gcs" in parse_qs(urlsplit(url).query)
+
+
+def is_google_tag(url: str) -> bool:
+    """Whether ``url`` loads the Google tag or Tag Manager itself."""
+    parts = urlsplit(url)
+    return (parts.hostname or "").endswith("googletagmanager.com") and parts.path in (
+        "/gtag/js",
+        "/gtm.js",
+    )
+
+
+def judged_by_consent_mode(url: str) -> bool:
+    """Google requests the Consent Mode checks judge, rather than the tracker checks.
+
+    Consent Mode lets the Google tag load before consent and send
+    cookieless requests that report the consent state in ``gcs``.
+    """
+    return is_google_tag(url) or carries_consent_state(url)
 
 
 # ── Judging ──────────────────────────────────────────────────────────
@@ -271,7 +288,7 @@ def _trackers_check(
             host
             for url in obs.tracker_requests
             if (host := tracker_host(url))
-            and not (expect.gcm_enabled and carries_consent_state(url))
+            and not (expect.gcm_enabled and judged_by_consent_mode(url))
         }
     )
     if not hosts:
@@ -454,7 +471,6 @@ class _Visit:
             logger.debug("Couldn't read consent signals", exc_info=True)
             return
         obs.consent_commands = signals.get("consent") or []
-        obs.google_tag_loads = signals.get("googleTags") or []
         obs.tcf = signals.get("tcf")
         obs.gpp = signals.get("gpp")
 

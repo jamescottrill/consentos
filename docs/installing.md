@@ -81,7 +81,7 @@ When the banner appears, **Check now** also visits the page again in a fresh bro
 | Rejecting is remembered | As above, for Reject. |
 | No optional cookies are set after Reject | An optional cookie was set even though the visitor rejected. |
 | No trackers load after Reject | A known tracker loaded after the visitor rejected. |
-| Consent Mode defaults are set before Google tags | The page set no Consent Mode defaults, or a Google tag loaded before them. Only checked when Consent Mode is on, as are the rows below. |
+| Consent Mode defaults are set before Google tags | The page set no Consent Mode defaults, or a Google tag or Tag Manager started before them. Only checked when Consent Mode is on, as are the rows below. |
 | Consent Mode defaults to denied | `ad_storage`, `ad_user_data`, `ad_personalization` or `analytics_storage` didn't default to denied. |
 | Google tags wait for the visitor's choice | A warning only: the default has no `wait_for_update`. |
 | Accept grants Consent Mode consent | After Accept, the page didn't send an update granting all four types. |

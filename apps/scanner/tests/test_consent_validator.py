@@ -132,6 +132,18 @@ class TestTrackers:
         expect = Expectations(gcm_enabled=True, cookies=EXPECT.cookies)
         assert status("before_consent.trackers", expect=expect, b=b) == "passed"
 
+    def test_the_google_tag_may_load_before_consent_with_consent_mode(self):
+        b = before(tracker_requests=["https://www.googletagmanager.com/gtag/js?id=G-1"])
+        expect = Expectations(gcm_enabled=True, cookies=EXPECT.cookies)
+        assert status("before_consent.trackers", expect=expect, b=b) == "passed"
+
+    def test_other_google_requests_without_a_consent_state_count_as_trackers(self):
+        b = before(
+            tracker_requests=["https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1"]
+        )
+        expect = Expectations(gcm_enabled=True, cookies=EXPECT.cookies)
+        assert status("before_consent.trackers", expect=expect, b=b) == "failed"
+
     def test_without_consent_mode_google_requests_count_as_trackers(self):
         b = before(tracker_requests=["https://www.google-analytics.com/g/collect?gcs=G100"])
         assert status("before_consent.trackers", b=b) == "failed"

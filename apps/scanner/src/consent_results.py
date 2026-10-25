@@ -42,12 +42,11 @@ class PhaseObservation:
     observed: bool = False
     cookies: list[dict] = field(default_factory=list)
     tracker_requests: list[str] = field(default_factory=list)
-    # Consent Mode commands sent through gtag, each with its page time ``t``.
+    # Consent Mode commands sent through gtag, each with its page time ``t``,
+    # and ``tag`` entries for Google tags starting up.
     consent_commands: list[dict] = field(default_factory=list)
     # When the choice was made, on the same clock as ``consent_commands``.
     click_time: float | None = None
-    # Google tag scripts that loaded, each with its start time ``t``.
-    google_tag_loads: list[dict] = field(default_factory=list)
     # Google requests made in this phase that report a consent state.
     consent_state_requests: list[str] = field(default_factory=list)
     tcf: dict | None = None
