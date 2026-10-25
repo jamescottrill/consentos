@@ -98,6 +98,10 @@ class ValidationExpectations(BaseModel):
 
     tcf_enabled: bool = False
     gcm_enabled: bool = False
+    gpp_enabled: bool = False
+    gpp_sections: list[str] = Field(default_factory=list)
+    gpc_enabled: bool = False
+    gpc_global_honour: bool = False
     cookies: list[ExpectedCookieRequest] = Field(default_factory=list)
 
 
@@ -110,7 +114,7 @@ class ValidationRequest(BaseModel):
 
 class ConsentCheckResponse(BaseModel):
     key: str
-    phase: Literal["before_consent", "after_accept", "after_reject"]
+    phase: Literal["before_consent", "after_accept", "after_reject", "with_gpc"]
     label: str
     status: Literal["passed", "failed", "inconclusive", "not_applicable"]
     detail: str | None = None
@@ -347,6 +351,10 @@ def create_app():  # noqa: ANN201
         expect = Expectations(
             tcf_enabled=body.expect.tcf_enabled,
             gcm_enabled=body.expect.gcm_enabled,
+            gpp_enabled=body.expect.gpp_enabled,
+            gpp_sections=body.expect.gpp_sections,
+            gpc_enabled=body.expect.gpc_enabled,
+            gpc_global_honour=body.expect.gpc_global_honour,
             cookies=[ExpectedCookie(c.name, c.category) for c in body.expect.cookies],
         )
         result = await run_consent_checks(

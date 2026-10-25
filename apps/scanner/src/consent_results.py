@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 CheckStatus = Literal["passed", "failed", "inconclusive", "not_applicable"]
-Phase = Literal["before_consent", "after_accept", "after_reject"]
+Phase = Literal["before_consent", "after_accept", "after_reject", "with_gpc"]
 
 
 @dataclass
@@ -21,6 +21,11 @@ class Expectations:
 
     tcf_enabled: bool = False
     gcm_enabled: bool = False
+    gpp_enabled: bool = False
+    # GPP API prefixes the site lists, such as ``usnat``.
+    gpp_sections: list[str] = field(default_factory=list)
+    gpc_enabled: bool = False
+    gpc_global_honour: bool = False
     cookies: list[ExpectedCookie] = field(default_factory=list)
 
 
@@ -46,6 +51,10 @@ class PhaseObservation:
     # Google requests made in this phase that report a consent state.
     consent_state_requests: list[str] = field(default_factory=list)
     tcf: dict | None = None
+    # ``ping`` and ``data`` from __gpp, or None when the page has no __gpp.
+    gpp: dict | None = None
+    # The banner's saved choice, read from its consent cookie.
+    consent_state: dict | None = None
 
 
 @dataclass
@@ -72,7 +81,7 @@ def not_observed(obs: PhaseObservation, needs_click: bool) -> str | None:
     if needs_click and not obs.banner_found:
         return "The banner didn't appear."
     if needs_click and not obs.clicked:
-        button = "Accept" if obs.phase == "after_accept" else "Reject"
+        button = "Reject" if obs.phase == "after_reject" else "Accept"
         return f"We couldn't find the banner's {button} button."
     if not obs.observed:
         return obs.error or "The check stopped before this step."
