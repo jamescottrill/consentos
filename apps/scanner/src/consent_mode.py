@@ -87,7 +87,11 @@ def _default_check(expect: Expectations, obs: PhaseObservation) -> CheckResult:
                 "first in <head>."
             ),
         )
-    early = [tag["url"] for tag in obs.google_tag_loads if tag["t"] < default["t"]]
+    early = [
+        c.get("name", "tag")
+        for c in obs.consent_commands
+        if c.get("command") == "tag" and c["t"] < default["t"]
+    ]
     if early:
         return CheckResult(
             key,
@@ -96,11 +100,11 @@ def _default_check(expect: Expectations, obs: PhaseObservation) -> CheckResult:
             "failed",
             detail=names(early),
             fix=(
-                "A Google tag loaded before Consent Mode defaults were set, so it ran without "
+                "A Google tag started before Consent Mode defaults were set, so it ran without "
                 "them. Move the ConsentOS script above your Google tag or Tag Manager snippet "
                 "in <head>."
             ),
-            evidence={"tags": early},
+            evidence={"started": early},
         )
     return CheckResult(key, obs.phase, label, "passed")
 
@@ -201,7 +205,7 @@ def _reject_check(expect: Expectations, obs: PhaseObservation) -> CheckResult:
         return off
     if reason := not_observed(obs, needs_click=True):
         return CheckResult(key, obs.phase, label, "inconclusive", detail=reason)
-    if not obs.consent_commands:
+    if not any(c.get("command") in ("default", "update") for c in obs.consent_commands):
         return CheckResult(
             key, obs.phase, label, "inconclusive", detail="No Consent Mode commands were seen."
         )

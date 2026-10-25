@@ -58,9 +58,16 @@ cd apps/banner && npm test
 # Run admin UI tests
 cd apps/admin-ui && npm test
 
+# Run scanner tests (the consent check tests need Chromium)
+cd apps/scanner && playwright install chromium && pytest
+
 # Stop test infrastructure
 make test-infra-down
 ```
+
+#### Consent check test pages
+
+`apps/scanner/tests/consent_pages.py` holds small pages that the consent checks run against in a real browser: one set up correctly, and broken ones that each change one thing. To add one, add a field to `Setup` for the new behaviour if it needs one, handle it in `render()`, and add a `Case` with the checks that should come out differently from the correct page. Every check not listed must pass.
 
 ## Making Changes
 
