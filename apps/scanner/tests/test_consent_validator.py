@@ -129,7 +129,12 @@ class TestTrackers:
 
     def test_google_requests_reporting_consent_state_are_left_to_consent_mode(self):
         b = before(tracker_requests=["https://www.google-analytics.com/g/collect?gcs=G100"])
-        assert status("before_consent.trackers", b=b) == "passed"
+        expect = Expectations(gcm_enabled=True, cookies=EXPECT.cookies)
+        assert status("before_consent.trackers", expect=expect, b=b) == "passed"
+
+    def test_without_consent_mode_google_requests_count_as_trackers(self):
+        b = before(tracker_requests=["https://www.google-analytics.com/g/collect?gcs=G100"])
+        assert status("before_consent.trackers", b=b) == "failed"
 
     def test_tracker_after_reject_fails(self):
         r = reject(tracker_requests=["https://bat.bing.com/action/0"])

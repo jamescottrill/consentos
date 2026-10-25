@@ -81,6 +81,12 @@ When the banner appears, **Check now** also visits the page twice more, in a fre
 | Rejecting is remembered | As above, for Reject. |
 | No optional cookies are set after Reject | An optional cookie was set even though the visitor rejected. |
 | No trackers load after Reject | A known tracker loaded after the visitor rejected. |
+| Consent Mode defaults are set before Google tags | The page set no Consent Mode defaults, or a Google tag loaded before them. Only checked when Consent Mode is on, as are the rows below. |
+| Consent Mode defaults to denied | `ad_storage`, `ad_user_data`, `ad_personalization` or `analytics_storage` didn't default to denied. |
+| Google tags wait for the visitor's choice | A warning only: the default has no `wait_for_update`. |
+| Accept grants Consent Mode consent | After Accept, the page didn't send an update granting all four types. |
+| Reject keeps Consent Mode denied | After Reject, one of the four types was granted. |
+| Google receives the visitor's choice | Google's own requests reported a different consent state, in their `gcs` parameter, from the visitor's choice. Inconclusive when the page makes no Google requests. |
 | TCF reports no consent before the visitor chooses, and after Reject | The TCF API reported consent the visitor hadn't given. Only checked when TCF is on. |
 | TCF reports consent after Accept | The TCF API still reported no consent after Accept. Only checked when TCF is on. |
 
