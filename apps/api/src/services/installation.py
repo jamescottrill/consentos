@@ -175,10 +175,11 @@ def consent_expectations(snapshot: dict | None) -> dict:
     cookies, so every cookie it sets comes out as unclassified.
     """
     if not snapshot:
-        return {"tcf_enabled": False, "cookies": []}
+        return {"tcf_enabled": False, "gcm_enabled": False, "cookies": []}
     config = snapshot.get("config") or {}
     return {
         "tcf_enabled": bool(config.get("tcf_enabled")),
+        "gcm_enabled": bool(config.get("gcm_enabled")),
         "cookies": [
             {"name": c["name"], "category": c.get("category")}
             for c in snapshot.get("cookies") or []
@@ -198,6 +199,7 @@ def consent_check_items(found: dict) -> list[dict]:
             c["status"],
             fix=c.get("fix"),
             detail=c.get("detail"),
+            severity=c.get("severity", "error"),
             group="consent",
         )
         for c in found.get("checks", [])

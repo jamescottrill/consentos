@@ -97,6 +97,7 @@ class ValidationExpectations(BaseModel):
     """What the site has switched on, from its live configuration."""
 
     tcf_enabled: bool = False
+    gcm_enabled: bool = False
     cookies: list[ExpectedCookieRequest] = Field(default_factory=list)
 
 
@@ -115,6 +116,7 @@ class ConsentCheckResponse(BaseModel):
     detail: str | None = None
     fix: str | None = None
     evidence: dict = Field(default_factory=dict)
+    severity: Literal["error", "warning"] = "error"
 
 
 class ValidationResponse(BaseModel):
@@ -344,6 +346,7 @@ def create_app():  # noqa: ANN201
 
         expect = Expectations(
             tcf_enabled=body.expect.tcf_enabled,
+            gcm_enabled=body.expect.gcm_enabled,
             cookies=[ExpectedCookie(c.name, c.category) for c in body.expect.cookies],
         )
         result = await run_consent_checks(

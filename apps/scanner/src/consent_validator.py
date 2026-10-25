@@ -15,8 +15,19 @@ from __future__ import annotations
 import fnmatch
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
+
+from src.consent_mode import consent_mode_checks
+from src.consent_results import (
+    CheckResult,
+    Expectations,
+    ExpectedCookie,
+    Phase,
+    PhaseObservation,
+    names,
+    not_observed,
+)
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
@@ -24,9 +35,6 @@ if TYPE_CHECKING:
     from src.navigation import NavigationPolicy
 
 logger = logging.getLogger(__name__)
-
-CheckStatus = Literal["passed", "failed", "inconclusive", "not_applicable"]
-Phase = Literal["before_consent", "after_accept", "after_reject"]
 
 BANNER_HOST_SELECTOR = "#consentos-banner-host"
 CONSENT_COOKIE = "_consentos_consent"
@@ -119,54 +127,17 @@ async () => {
     ? await withTimeout(new Promise((resolve) => window.__tcfapi(
         'getTCData', 2, (data, success) => resolve({ success, data: data || null }))))
     : null;
+  const googleTag = new RegExp(
+    'googletagmanager\\.com/(gtag/js|gtm\\.js)|google-analytics\\.com/(analytics|ga)\\.js');
   return {
     consent: (window.__consentosCheck && window.__consentosCheck.consent) || [],
+    googleTags: performance.getEntriesByType('resource')
+      .filter((e) => googleTag.test(e.name))
+      .map((e) => ({ url: e.name, t: e.startTime })),
     tcf,
   };
 }
 """
-
-
-@dataclass
-class ExpectedCookie:
-    name: str
-    category: str | None
-
-
-@dataclass
-class Expectations:
-    """What the site has switched on, from its live configuration."""
-
-    tcf_enabled: bool = False
-    cookies: list[ExpectedCookie] = field(default_factory=list)
-
-
-@dataclass
-class PhaseObservation:
-    """What one phase of the visit looked like."""
-
-    phase: Phase
-    loaded: bool = False
-    error: str | None = None
-    banner_found: bool = False
-    # Whether the visitor's choice for this phase was made.
-    clicked: bool = False
-    observed: bool = False
-    cookies: list[dict] = field(default_factory=list)
-    tracker_requests: list[str] = field(default_factory=list)
-    consent_commands: list[dict] = field(default_factory=list)
-    tcf: dict | None = None
-
-
-@dataclass
-class CheckResult:
-    key: str
-    phase: Phase
-    label: str
-    status: CheckStatus
-    detail: str | None = None
-    fix: str | None = None
-    evidence: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -188,8 +159,9 @@ def tracker_host(url: str) -> str | None:
 def carries_consent_state(url: str) -> bool:
     """Whether a Google request reports its consent state in ``gcs``.
 
-    These are judged by the Consent Mode checks, since Consent Mode lets
-    Google tags send cookieless requests before consent.
+    With Consent Mode on, these are judged by the Consent Mode checks
+    rather than as trackers, since Consent Mode lets Google tags send
+    cookieless requests before consent.
     """
     return "gcs" in parse_qs(urlsplit(url).query)
 
@@ -220,25 +192,6 @@ def _sort_cookies(
     return optional, unclassified
 
 
-def _names(items: list[str]) -> str:
-    shown = ", ".join(items[:5])
-    return shown if len(items) <= 5 else f"{shown} and {len(items) - 5} more"
-
-
-def _not_observed(obs: PhaseObservation, needs_click: bool) -> str | None:
-    """Why ``obs`` can't be judged, or None when it can."""
-    if not obs.loaded:
-        return obs.error or "The page didn't load."
-    if needs_click and not obs.banner_found:
-        return "The banner didn't appear."
-    if needs_click and not obs.clicked:
-        button = "Accept" if obs.phase == "after_accept" else "Reject"
-        return f"We couldn't find the banner's {button} button."
-    if not obs.observed:
-        return obs.error or "The check stopped before this step."
-    return None
-
-
 def _cookies_check(
     obs: PhaseObservation, expected: list[ExpectedCookie], *, needs_click: bool
 ) -> CheckResult:
@@ -249,7 +202,7 @@ def _cookies_check(
         if before
         else "No optional cookies are set after Reject"
     )
-    reason = _not_observed(obs, needs_click)
+    reason = not_observed(obs, needs_click)
     if reason:
         return CheckResult(key, obs.phase, label, "inconclusive", detail=reason)
 
@@ -261,9 +214,9 @@ def _cookies_check(
             obs.phase,
             label,
             "failed",
-            detail=_names(optional),
+            detail=names(optional),
             fix=(
-                f"These optional cookies are set {when}: {_names(optional)}. Check the "
+                f"These optional cookies are set {when}: {names(optional)}. Check the "
                 "scripts that set them have the right category on the Cookies tab, and that "
                 "the ConsentOS script is the first in <head>. The banner can't block cookies "
                 "your server sets itself."
@@ -278,7 +231,7 @@ def _cookies_check(
             "inconclusive",
             detail=(
                 f"These cookies are set {when} but aren't classified yet: "
-                f"{_names(unclassified)}. Review them on the Cookies tab so we can tell "
+                f"{names(unclassified)}. Review them on the Cookies tab so we can tell "
                 "whether they're allowed."
             ),
             evidence={"cookies": unclassified[:_EVIDENCE_LIMIT]},
@@ -286,13 +239,15 @@ def _cookies_check(
     return CheckResult(key, obs.phase, label, "passed")
 
 
-def _trackers_check(obs: PhaseObservation, *, needs_click: bool) -> CheckResult:
+def _trackers_check(
+    obs: PhaseObservation, expect: Expectations, *, needs_click: bool
+) -> CheckResult:
     before = obs.phase == "before_consent"
     key = f"{obs.phase}.trackers"
     label = (
         "No trackers load before the visitor chooses" if before else "No trackers load after Reject"
     )
-    reason = _not_observed(obs, needs_click)
+    reason = not_observed(obs, needs_click)
     if reason:
         return CheckResult(key, obs.phase, label, "inconclusive", detail=reason)
 
@@ -300,7 +255,8 @@ def _trackers_check(obs: PhaseObservation, *, needs_click: bool) -> CheckResult:
         {
             host
             for url in obs.tracker_requests
-            if (host := tracker_host(url)) and not carries_consent_state(url)
+            if (host := tracker_host(url))
+            and not (expect.gcm_enabled and carries_consent_state(url))
         }
     )
     if not hosts:
@@ -311,9 +267,9 @@ def _trackers_check(obs: PhaseObservation, *, needs_click: bool) -> CheckResult:
         obs.phase,
         label,
         "failed",
-        detail=_names(hosts),
+        detail=names(hosts),
         fix=(
-            f"These trackers loaded {when}: {_names(hosts)}. Check the scripts that load "
+            f"These trackers loaded {when}: {names(hosts)}. Check the scripts that load "
             "them have a category on the Cookies tab, and that the ConsentOS script is the "
             "first in <head>."
         ),
@@ -325,7 +281,7 @@ def _saved_check(obs: PhaseObservation) -> CheckResult:
     accept = obs.phase == "after_accept"
     key = f"{obs.phase}.saved"
     label = "Accepting is remembered" if accept else "Rejecting is remembered"
-    reason = _not_observed(obs, needs_click=True)
+    reason = not_observed(obs, needs_click=True)
     if reason:
         return CheckResult(key, obs.phase, label, "inconclusive", detail=reason)
     if any(c["name"] == CONSENT_COOKIE for c in obs.cookies):
@@ -356,7 +312,7 @@ def _tcf_check(obs: PhaseObservation, expect: Expectations, *, needs_click: bool
     }[obs.phase]
     if not expect.tcf_enabled:
         return CheckResult(key, obs.phase, label, "not_applicable")
-    reason = _not_observed(obs, needs_click)
+    reason = not_observed(obs, needs_click)
     if reason:
         return CheckResult(key, obs.phase, label, "inconclusive", detail=reason)
     if obs.tcf is None:
@@ -413,16 +369,21 @@ def judge(
     reject: PhaseObservation,
 ) -> list[CheckResult]:
     """Turn what each phase looked like into the site's consent checks."""
+    consent_mode = consent_mode_checks(expect, before, accept, reject)
     return [
         _cookies_check(before, expect.cookies, needs_click=False),
-        _trackers_check(before, needs_click=False),
+        _trackers_check(before, expect, needs_click=False),
+        *consent_mode["before_consent"],
         _tcf_check(before, expect, needs_click=False),
         _saved_check(accept),
+        *consent_mode["after_accept"],
         _tcf_check(accept, expect, needs_click=True),
         _saved_check(reject),
         _cookies_check(reject, expect.cookies, needs_click=True),
-        _trackers_check(reject, needs_click=True),
+        _trackers_check(reject, expect, needs_click=True),
+        *consent_mode["after_reject"],
         _tcf_check(reject, expect, needs_click=True),
+        *consent_mode["received"],
     ]
 
 
@@ -441,11 +402,27 @@ class _Visit:
             "after_accept": [],
             "after_reject": [],
         }
+        self.consent_state_requests: dict[Phase, list[str]] = {
+            "before_consent": [],
+            "after_accept": [],
+            "after_reject": [],
+        }
         page.on("request", self._on_request)
 
     def _on_request(self, request) -> None:  # noqa: ANN001
         if tracker_host(request.url):
             self.requests[self.phase].append(request.url)
+        if carries_consent_state(request.url):
+            self.consent_state_requests[self.phase].append(request.url)
+
+    async def choose(self, obs: PhaseObservation, selectors: tuple[str, ...]) -> None:
+        """Make the visitor's choice, recording when on the page's clock."""
+        self.phase = obs.phase
+        try:
+            obs.click_time = await self.page.evaluate("performance.now()")
+        except Exception:
+            obs.click_time = None
+        obs.clicked = await _click(self.page, selectors)
 
     async def observe(self, obs: PhaseObservation) -> None:
         obs.observed = True
@@ -453,12 +430,14 @@ class _Visit:
             {"name": c["name"], "domain": c["domain"]} for c in await self.context.cookies()
         ]
         obs.tracker_requests = list(self.requests[obs.phase])
+        obs.consent_state_requests = list(self.consent_state_requests[obs.phase])
         try:
             signals = await self.page.evaluate(_SIGNALS_SCRIPT)
         except Exception:
             logger.debug("Couldn't read consent signals", exc_info=True)
             return
         obs.consent_commands = signals.get("consent") or []
+        obs.google_tag_loads = signals.get("googleTags") or []
         obs.tcf = signals.get("tcf")
 
 
@@ -529,8 +508,7 @@ async def run_consent_checks(
                 await visit.observe(before)
                 accept.loaded, accept.banner_found = True, before.banner_found
                 if before.banner_found:
-                    visit.phase = "after_accept"
-                    accept.clicked = await _click(visit.page, _ACCEPT_SELECTORS)
+                    await visit.choose(accept, _ACCEPT_SELECTORS)
                     if accept.clicked:
                         await visit.page.wait_for_timeout(settle_ms)
                         await visit.observe(accept)
@@ -542,8 +520,7 @@ async def run_consent_checks(
             await _load(visit, url, reject, timeout_ms, banner_wait_ms)
             if reject.loaded and reject.banner_found:
                 # Only requests made after the click count against Reject.
-                visit.phase = "after_reject"
-                reject.clicked = await _click(visit.page, _REJECT_SELECTORS)
+                await visit.choose(reject, _REJECT_SELECTORS)
                 if reject.clicked:
                     await visit.page.wait_for_timeout(settle_ms)
                     await visit.observe(reject)

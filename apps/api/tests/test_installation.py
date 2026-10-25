@@ -265,7 +265,7 @@ class TestCheckNow:
         consent = [c for c in resp.json()["last_check"]["checks"] if c["group"] == "consent"]
         assert [c["key"] for c in consent] == ["before_consent.cookies"]
         assert sent[0]["url"] == f"https://{site['domain']}/"
-        assert sent[0]["expect"] == {"tcf_enabled": False, "cookies": []}
+        assert sent[0]["expect"] == {"tcf_enabled": False, "gcm_enabled": True, "cookies": []}
 
     async def test_a_failed_consent_check_is_a_problem(self, db_client, auth_headers):
         site = await _site(db_client, auth_headers)
@@ -541,16 +541,21 @@ def test_page_without_query():
 class TestConsentChecks:
     def test_expectations_come_from_the_live_revision(self):
         snapshot = {
-            "config": {"tcf_enabled": True},
+            "config": {"tcf_enabled": True, "gcm_enabled": False},
             "cookies": [{"name": "_ga", "domain": ".example.com", "category": "analytics"}],
         }
         assert consent_expectations(snapshot) == {
             "tcf_enabled": True,
+            "gcm_enabled": False,
             "cookies": [{"name": "_ga", "category": "analytics"}],
         }
 
     def test_an_unpublished_site_expects_nothing(self):
-        assert consent_expectations(None) == {"tcf_enabled": False, "cookies": []}
+        assert consent_expectations(None) == {
+            "tcf_enabled": False,
+            "gcm_enabled": False,
+            "cookies": [],
+        }
 
     def test_checks_that_do_not_apply_are_dropped(self):
         items = consent_check_items(CONSENT_PASSED)
@@ -590,3 +595,23 @@ class TestConsentChecks:
         result = _diagnose(_found(str(SITE_ID), "example.com"))
         [consent] = [c for c in result["checks"] if c["group"] == "consent"]
         assert consent["status"] == "skipped"
+
+    def test_a_consent_warning_keeps_its_severity_and_does_not_fail_the_check(self):
+        consent = consent_check_items(
+            {
+                "checks": [
+                    {
+                        "key": "before_consent.gcm_wait",
+                        "label": "Google tags wait for the visitor's choice",
+                        "status": "failed",
+                        "severity": "warning",
+                        "fix": "The Consent Mode default has no wait_for_update.",
+                    }
+                ]
+            }
+        )
+        assert consent[0]["severity"] == "warning"
+        result = _diagnose(
+            _found(str(SITE_ID), "example.com"), api_base="https://cmp.example.net", consent=consent
+        )
+        assert result["ok"] is True
