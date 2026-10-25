@@ -94,7 +94,6 @@ async def get_public_site_config(
         "gpc_jurisdictions": resolved.get("gpc_jurisdictions"),
         "gpc_global_honour": resolved.get("gpc_global_honour"),
         "gcm_enabled": resolved.get("gcm_enabled"),
-        "gcm_default": resolved.get("gcm_default"),
         "shopify_privacy_enabled": resolved.get("shopify_privacy_enabled"),
         "banner_config": resolved.get("banner_config"),
         "privacy_policy_url": resolved.get("privacy_policy_url"),

@@ -194,3 +194,25 @@ class TestChangedSources:
 
     def test_parent_removed(self):
         assert changed_sources([ORG_SOURCE, GROUP_SOURCE], [ORG_SOURCE]) == [GROUP_SOURCE]
+
+
+class TestRetiredFields:
+    def test_are_left_out(self):
+        from src.services.config_snapshot import without_retired_fields
+
+        snapshot = {"config": {"gcm_default": {"ad_storage": "denied"}, "gcm_enabled": True}}
+        assert without_retired_fields(snapshot) == {"config": {"gcm_enabled": True}}
+
+    def test_a_snapshot_without_them_is_unchanged(self):
+        from src.services.config_snapshot import comparable_hash, without_retired_fields
+
+        snapshot = {"config": {"gcm_enabled": True}}
+        assert without_retired_fields(snapshot) is snapshot
+        assert comparable_hash(snapshot, "stored") == "stored"
+
+    def test_hash_matches_a_draft_without_them(self):
+        from src.services.config_snapshot import comparable_hash, content_hash
+
+        draft = {"config": {"gcm_enabled": True}}
+        old = {"config": {"gcm_enabled": True, "gcm_default": {}}}
+        assert comparable_hash(old, content_hash(old)) == content_hash(draft)

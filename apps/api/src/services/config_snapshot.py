@@ -57,6 +57,11 @@ from src.services.config_resolver import (
 # read correctly.
 SNAPSHOT_FORMAT = 1
 
+# Config fields that are no longer served. Revisions published before
+# they were removed still hold them, so they're left out whenever a
+# revision is compared with a draft or another revision.
+RETIRED_CONFIG_FIELDS = frozenset({"gcm_default"})
+
 # Fields the resolver carries that don't affect what the banner serves.
 # Leaving them out stops a scan-setting change from looking like an
 # unpublished config change.
@@ -221,6 +226,24 @@ def changed_sources(
     ]
     changed.extend(source for key, source in recorded_by_key.items() if key not in current_by_key)
     return changed
+
+
+def without_retired_fields(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """``snapshot`` with any retired config fields left out."""
+    config = snapshot.get("config") or {}
+    if not RETIRED_CONFIG_FIELDS & config.keys():
+        return snapshot
+    kept = {k: v for k, v in config.items() if k not in RETIRED_CONFIG_FIELDS}
+    return {**snapshot, "config": kept}
+
+
+def comparable_hash(snapshot: dict[str, Any], stored_hash: str) -> str:
+    """A revision's hash as a current draft would have it.
+
+    Only differs from ``stored_hash`` for revisions holding retired fields.
+    """
+    trimmed = without_retired_fields(snapshot)
+    return stored_hash if trimmed is snapshot else content_hash(trimmed)
 
 
 def content_hash(value: Any) -> str:

@@ -24,7 +24,6 @@ class SiteGroupConfigUpdate(BaseModel):
     gpc_jurisdictions: list[str] | None = None
     gpc_global_honour: bool | None = None
     gcm_enabled: bool | None = None
-    gcm_default: dict | None = None
     shopify_privacy_enabled: bool | None = None
     banner_config: BannerConfig | None = None
     privacy_policy_url: str | None = None
@@ -67,7 +66,6 @@ class SiteGroupConfigResponse(BaseModel):
     gpc_jurisdictions: list[str] | None
     gpc_global_honour: bool | None
     gcm_enabled: bool | None
-    gcm_default: dict | None
     shopify_privacy_enabled: bool | None
     banner_config: dict | None
     privacy_policy_url: str | None

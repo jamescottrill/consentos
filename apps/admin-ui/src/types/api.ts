@@ -52,7 +52,6 @@ export interface SiteGroupConfig {
   tcf_enabled: boolean | null;
   tcf_publisher_cc: string | null;
   gcm_enabled: boolean | null;
-  gcm_default: Record<string, 'granted' | 'denied'> | null;
   shopify_privacy_enabled: boolean | null;
   gpp_enabled: boolean | null;
   gpp_supported_apis: string[] | null;
@@ -101,7 +100,6 @@ export interface OrgConfig {
   gpc_jurisdictions: string[] | null;
   gpc_global_honour: boolean | null;
   gcm_enabled: boolean | null;
-  gcm_default: Record<string, 'granted' | 'denied'> | null;
   shopify_privacy_enabled: boolean | null;
   banner_config: BannerConfig | null;
   privacy_policy_url: string | null;
@@ -125,7 +123,6 @@ export interface SiteConfig {
   gpc_jurisdictions: string[] | null;
   gpc_global_honour: boolean;
   gcm_enabled: boolean;
-  gcm_default: Record<string, 'granted' | 'denied'> | null;
   shopify_privacy_enabled: boolean;
   banner_config: BannerConfig | null;
   privacy_policy_url: string | null;

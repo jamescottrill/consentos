@@ -30,7 +30,6 @@ def _mock_org_config(**overrides):
     config.tcf_enabled = overrides.get("tcf_enabled")
     config.tcf_publisher_cc = overrides.get("tcf_publisher_cc")
     config.gcm_enabled = overrides.get("gcm_enabled")
-    config.gcm_default = overrides.get("gcm_default")
     config.banner_config = overrides.get("banner_config")
     config.gpp_enabled = overrides.get("gpp_enabled")
     config.gpp_supported_apis = overrides.get("gpp_supported_apis")

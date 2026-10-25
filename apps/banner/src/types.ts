@@ -45,7 +45,6 @@ export interface SiteConfig {
   gpc_jurisdictions: string[];
   gpc_global_honour: boolean;
   gcm_enabled: boolean;
-  gcm_default: Record<string, 'granted' | 'denied'> | null;
   shopify_privacy_enabled: boolean;
   banner_config: BannerConfig | null;
   /**

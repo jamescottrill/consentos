@@ -32,9 +32,11 @@ from src.models.site_config_revision import SiteConfigRevision
 from src.models.translation import Translation
 from src.models.user import User
 from src.services.config_snapshot import (
+    RETIRED_CONFIG_FIELDS,
     SiteNotFoundError,
     build_site_snapshot,
     changed_sources,
+    comparable_hash,
 )
 
 logger = logging.getLogger(__name__)
@@ -293,7 +295,8 @@ async def get_draft_status(db: AsyncSession, site_id: uuid.UUID) -> DraftStatus:
     return DraftStatus(
         live_revision=live,
         content_hash=built.content_hash,
-        has_unpublished_changes=built.content_hash != live.content_hash,
+        has_unpublished_changes=built.content_hash
+        != comparable_hash(live.snapshot, live.content_hash),
         changed_sources=changed_sources(live.sources, built.sources),
         reconsent_reasons=reconsent_reasons(live.snapshot, built.snapshot),
         last_attempt=await get_last_attempt(db, site_id),
@@ -328,7 +331,7 @@ async def publish_draft(
         raise DraftOutOfDateError(built.content_hash)
 
     live = await _live_for_update(db, site)
-    if live is not None and live.content_hash == built.content_hash:
+    if live is not None and comparable_hash(live.snapshot, live.content_hash) == built.content_hash:
         raise NothingToPublishError(str(site_id))
 
     return await _make_live(
@@ -568,6 +571,8 @@ async def discard_draft(db: AsyncSession, site_id: uuid.UUID) -> None:
 async def _restore_site_config(
     db: AsyncSession, site_id: uuid.UUID, values: dict[str, Any]
 ) -> None:
+    # Revisions published before a field was retired still record it.
+    values = {k: v for k, v in values.items() if k not in RETIRED_CONFIG_FIELDS}
     # An empty layer means the site had no config row when published.
     if values:
         await db.execute(update(SiteConfig).where(SiteConfig.site_id == site_id).values(**values))

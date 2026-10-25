@@ -734,6 +734,10 @@ Scheduled scans now use the site's page limit and are skipped while a scan is al
 
 A running scan is now only treated as lost when it has recorded no progress for 10 minutes, rather than 10 minutes after it started, and `SCANNER_TIMEOUT_SECONDS` now limits the wait for each page rather than the whole scan. Large sites that used to fail partway through now finish.
 
+### Consent Mode defaults setting removed
+
+Migration `0016` drops `gcm_default` from site, site group and organisation configs, and the field is gone from the config API. It was never applied: the banner always sets every Consent Mode type to denied before its configuration arrives, and still does. Any stored values are discarded. Revisions published earlier keep the field in their snapshots, where it's ignored, so the upgrade doesn't mark any site as having unpublished changes. Downgrading adds the columns back, empty.
+
 ### Consent checks
 
 **Check now** also checks what happens when a visitor accepts or rejects, through the scanner's `POST /validate` endpoint, so upgrade the scanner with the API. Each check now reports passed, failed, inconclusive or not applicable. `POST /validate` takes the site's expected settings and returns a list of checks, replacing the old `pre_consent_issues`, `post_accept_issues`, `post_reject_issues` and `dark_pattern_issues` lists. Anything else calling `POST /validate` needs updating.

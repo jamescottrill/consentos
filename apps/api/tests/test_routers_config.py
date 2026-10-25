@@ -36,7 +36,6 @@ def _mock_config(**overrides):
     config.gpc_jurisdictions = overrides.get("gpc_jurisdictions", default_jurisdictions)
     config.gpc_global_honour = overrides.get("gpc_global_honour", False)
     config.gcm_enabled = overrides.get("gcm_enabled", True)
-    config.gcm_default = overrides.get("gcm_default")
     config.banner_config = overrides.get("banner_config", {})
     config.regional_modes = overrides.get("regional_modes")
     config.privacy_policy_url = overrides.get("privacy_policy_url")
