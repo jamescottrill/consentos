@@ -13,10 +13,12 @@ or a button that couldn't be found can't read as a clean result.
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from src.consent_mode import consent_mode_checks
 from src.consent_results import (
@@ -28,6 +30,7 @@ from src.consent_results import (
     names,
     not_observed,
 )
+from src.gpp_checks import gpp_checks
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
@@ -117,6 +120,11 @@ RECORDER_SCRIPT = """
 })();
 """
 
+# The browser setting a visitor turns on to send Global Privacy Control.
+GPC_SCRIPT = """
+Object.defineProperty(Navigator.prototype, 'globalPrivacyControl', { get: () => true });
+"""
+
 # TCF's getTCData may never call back, so it is given a deadline.
 _SIGNALS_SCRIPT = """
 async () => {
@@ -127,6 +135,12 @@ async () => {
     ? await withTimeout(new Promise((resolve) => window.__tcfapi(
         'getTCData', 2, (data, success) => resolve({ success, data: data || null }))))
     : null;
+  const gpp = typeof window.__gpp === 'function'
+    ? {
+        ping: await withTimeout(new Promise((resolve) => window.__gpp('ping', resolve))),
+        data: await withTimeout(new Promise((resolve) => window.__gpp('getGPPData', resolve))),
+      }
+    : null;
   const googleTag = new RegExp(
     'googletagmanager\\.com/(gtag/js|gtm\\.js)|google-analytics\\.com/(analytics|ga)\\.js');
   return {
@@ -135,6 +149,7 @@ async () => {
       .filter((e) => googleTag.test(e.name))
       .map((e) => ({ url: e.name, t: e.startTime })),
     tcf,
+    gpp,
   };
 }
 """
@@ -367,23 +382,33 @@ def judge(
     before: PhaseObservation,
     accept: PhaseObservation,
     reject: PhaseObservation,
+    gpc: PhaseObservation | None = None,
 ) -> list[CheckResult]:
-    """Turn what each phase looked like into the site's consent checks."""
+    """Turn what each phase looked like into the site's consent checks.
+
+    ``gpc`` is a visit with Global Privacy Control on, made only when the
+    site has GPC switched on.
+    """
     consent_mode = consent_mode_checks(expect, before, accept, reject)
+    gpp = gpp_checks(expect, before, accept, reject, gpc or PhaseObservation("with_gpc"))
     return [
         _cookies_check(before, expect.cookies, needs_click=False),
         _trackers_check(before, expect, needs_click=False),
         *consent_mode["before_consent"],
         _tcf_check(before, expect, needs_click=False),
+        *gpp["before_consent"],
         _saved_check(accept),
         *consent_mode["after_accept"],
         _tcf_check(accept, expect, needs_click=True),
+        *gpp["after_accept"],
         _saved_check(reject),
         _cookies_check(reject, expect.cookies, needs_click=True),
         _trackers_check(reject, expect, needs_click=True),
         *consent_mode["after_reject"],
         _tcf_check(reject, expect, needs_click=True),
+        *gpp["after_reject"],
         *consent_mode["received"],
+        *gpp["with_gpc"],
     ]
 
 
@@ -397,16 +422,8 @@ class _Visit:
         self.context = context
         self.page = page
         self.phase: Phase = "before_consent"
-        self.requests: dict[Phase, list[str]] = {
-            "before_consent": [],
-            "after_accept": [],
-            "after_reject": [],
-        }
-        self.consent_state_requests: dict[Phase, list[str]] = {
-            "before_consent": [],
-            "after_accept": [],
-            "after_reject": [],
-        }
+        self.requests: dict[Phase, list[str]] = defaultdict(list)
+        self.consent_state_requests: dict[Phase, list[str]] = defaultdict(list)
         page.on("request", self._on_request)
 
     def _on_request(self, request) -> None:  # noqa: ANN001
@@ -426,9 +443,9 @@ class _Visit:
 
     async def observe(self, obs: PhaseObservation) -> None:
         obs.observed = True
-        obs.cookies = [
-            {"name": c["name"], "domain": c["domain"]} for c in await self.context.cookies()
-        ]
+        cookies = await self.context.cookies()
+        obs.cookies = [{"name": c["name"], "domain": c["domain"]} for c in cookies]
+        obs.consent_state = _saved_choice(cookies)
         obs.tracker_requests = list(self.requests[obs.phase])
         obs.consent_state_requests = list(self.consent_state_requests[obs.phase])
         try:
@@ -439,6 +456,18 @@ class _Visit:
         obs.consent_commands = signals.get("consent") or []
         obs.google_tag_loads = signals.get("googleTags") or []
         obs.tcf = signals.get("tcf")
+        obs.gpp = signals.get("gpp")
+
+
+def _saved_choice(cookies: list[dict]) -> dict | None:
+    """The banner's saved choice, from the value of its consent cookie."""
+    for cookie in cookies:
+        if cookie["name"] == CONSENT_COOKIE:
+            try:
+                return json.loads(unquote(cookie.get("value", "")))
+            except ValueError:
+                return None
+    return None
 
 
 async def _load(
@@ -484,18 +513,25 @@ async def run_consent_checks(
     banner_wait_ms: int = 8_000,
     settle_ms: int = 2_000,
 ) -> ValidationResult:
-    """Visit ``url`` as a new visitor, accept, then visit again and reject."""
+    """Visit ``url`` as a new visitor and accept, again and reject, then with GPC on."""
     from playwright.async_api import async_playwright
 
     result = ValidationResult(url=url)
     before = PhaseObservation("before_consent")
     accept = PhaseObservation("after_accept")
     reject = PhaseObservation("after_reject")
+    gpc = PhaseObservation("with_gpc")
 
-    async def new_visit(browser) -> _Visit:  # noqa: ANN001
-        context = await browser.new_context(ignore_https_errors=True, service_workers="block")
+    async def new_visit(browser, *, send_gpc: bool = False) -> _Visit:  # noqa: ANN001
+        context = await browser.new_context(
+            ignore_https_errors=True,
+            service_workers="block",
+            extra_http_headers={"Sec-GPC": "1"} if send_gpc else None,
+        )
         await policy.apply(context)
         await context.add_init_script(RECORDER_SCRIPT)
+        if send_gpc:
+            await context.add_init_script(GPC_SCRIPT)
         return _Visit(context, await context.new_page())
 
     async with async_playwright() as pw:
@@ -525,16 +561,26 @@ async def run_consent_checks(
                     await visit.page.wait_for_timeout(settle_ms)
                     await visit.observe(reject)
             await visit.context.close()
+
+            if expect.gpc_enabled:
+                visit = await new_visit(browser, send_gpc=True)
+                await _load(visit, url, gpc, timeout_ms, banner_wait_ms)
+                if gpc.loaded and gpc.banner_found:
+                    await visit.choose(gpc, _ACCEPT_SELECTORS)
+                    if gpc.clicked:
+                        await visit.page.wait_for_timeout(settle_ms)
+                        await visit.observe(gpc)
+                await visit.context.close()
         except Exception as exc:
             logger.warning("Consent checks failed for %s: %s", url, exc)
             result.error = str(exc).splitlines()[0]
             # Phases the browser didn't get to are reported with the error,
             # not as a missing button.
-            for obs in (before, accept, reject):
+            for obs in (before, accept, reject, gpc):
                 if not obs.observed:
                     obs.loaded, obs.error = False, result.error
         finally:
             await browser.close()
 
-    result.checks = judge(expect, before, accept, reject)
+    result.checks = judge(expect, before, accept, reject, gpc)
     return result

@@ -174,15 +174,17 @@ def consent_expectations(snapshot: dict | None) -> dict:
     An unpublished site serves the built-in defaults and has no classified
     cookies, so every cookie it sets comes out as unclassified.
     """
-    if not snapshot:
-        return {"tcf_enabled": False, "gcm_enabled": False, "cookies": []}
-    config = snapshot.get("config") or {}
+    config = (snapshot or {}).get("config") or {}
     return {
         "tcf_enabled": bool(config.get("tcf_enabled")),
         "gcm_enabled": bool(config.get("gcm_enabled")),
+        "gpp_enabled": bool(config.get("gpp_enabled")),
+        "gpp_sections": list(config.get("gpp_supported_apis") or []),
+        "gpc_enabled": bool(config.get("gpc_enabled")),
+        "gpc_global_honour": bool(config.get("gpc_global_honour")),
         "cookies": [
             {"name": c["name"], "category": c.get("category")}
-            for c in snapshot.get("cookies") or []
+            for c in (snapshot or {}).get("cookies") or []
         ],
     }
 

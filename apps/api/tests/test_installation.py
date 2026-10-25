@@ -265,7 +265,15 @@ class TestCheckNow:
         consent = [c for c in resp.json()["last_check"]["checks"] if c["group"] == "consent"]
         assert [c["key"] for c in consent] == ["before_consent.cookies"]
         assert sent[0]["url"] == f"https://{site['domain']}/"
-        assert sent[0]["expect"] == {"tcf_enabled": False, "gcm_enabled": True, "cookies": []}
+        assert sent[0]["expect"] == {
+            "tcf_enabled": False,
+            "gcm_enabled": True,
+            "gpp_enabled": True,
+            "gpp_sections": ["usnat"],
+            "gpc_enabled": True,
+            "gpc_global_honour": False,
+            "cookies": [],
+        }
 
     async def test_a_failed_consent_check_is_a_problem(self, db_client, auth_headers):
         site = await _site(db_client, auth_headers)
@@ -541,12 +549,23 @@ def test_page_without_query():
 class TestConsentChecks:
     def test_expectations_come_from_the_live_revision(self):
         snapshot = {
-            "config": {"tcf_enabled": True, "gcm_enabled": False},
+            "config": {
+                "tcf_enabled": True,
+                "gcm_enabled": False,
+                "gpp_enabled": True,
+                "gpp_supported_apis": ["usnat", "usca"],
+                "gpc_enabled": True,
+                "gpc_global_honour": True,
+            },
             "cookies": [{"name": "_ga", "domain": ".example.com", "category": "analytics"}],
         }
         assert consent_expectations(snapshot) == {
             "tcf_enabled": True,
             "gcm_enabled": False,
+            "gpp_enabled": True,
+            "gpp_sections": ["usnat", "usca"],
+            "gpc_enabled": True,
+            "gpc_global_honour": True,
             "cookies": [{"name": "_ga", "category": "analytics"}],
         }
 
@@ -554,6 +573,10 @@ class TestConsentChecks:
         assert consent_expectations(None) == {
             "tcf_enabled": False,
             "gcm_enabled": False,
+            "gpp_enabled": False,
+            "gpp_sections": [],
+            "gpc_enabled": False,
+            "gpc_global_honour": False,
             "cookies": [],
         }
 
