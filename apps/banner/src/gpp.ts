@@ -113,7 +113,11 @@ export interface GppHeader {
   version: number;
   /** Section IDs present in this GPP string, in order. */
   sectionIds: number[];
-  /** Section IDs applicable to the current transaction. */
+  /**
+   * Section IDs applicable to the current transaction. These aren't part of
+   * the encoded header: `__gpp` reports them separately, and decoding takes
+   * them to be every section in the string.
+   */
   applicableSections: number[];
 }
 
@@ -123,12 +127,7 @@ export function encodeGppHeader(header: GppHeader): string {
 
   writer.writeInt(GPP_HEADER_TYPE, 6);
   writer.writeInt(header.version, 6);
-
-  // Section IDs — range-encoded with Fibonacci
   writeIdRange(writer, header.sectionIds);
-
-  // Applicable sections — range-encoded with Fibonacci
-  writeIdRange(writer, header.applicableSections);
 
   return bytesToBase64url(writer.toBytes());
 }
@@ -145,72 +144,67 @@ export function decodeGppHeader(encoded: string): GppHeader {
 
   const version = reader.readInt(6);
   const sectionIds = readIdRange(reader);
-  const applicableSections = readIdRange(reader);
 
-  return { version, sectionIds, applicableSections };
+  return { version, sectionIds, applicableSections: [...sectionIds] };
 }
 
 /**
- * Write a list of IDs using range encoding with Fibonacci integers.
+ * Write a list of IDs as the specification's Fibonacci integer range.
  *
  * Format:
- *   NumEntries: Int(6) — number of range entries
+ *   NumEntries: Int(12)
  *   For each entry:
- *     IsGroup: Bool — false = single ID, true = contiguous range
- *     If single: Id as Fibonacci integer
- *     If group:  StartId + EndId as Fibonacci integers
+ *     IsGroup: Bool. False for a single ID, true for a run of consecutive IDs.
+ *     Single: the ID as a Fibonacci integer.
+ *     Group:  the first and last IDs as Fibonacci integers.
+ *   Each Fibonacci integer is an offset from the ID written before it,
+ *   starting from 0.
  */
 function writeIdRange(writer: BitWriter, ids: number[]): void {
-  if (ids.length === 0) {
-    writer.writeInt(0, 6);
-    return;
-  }
-
-  // Collapse consecutive IDs into ranges
-  const sorted = [...ids].sort((a, b) => a - b);
+  const sorted = [...new Set(ids)].sort((a, b) => a - b);
   const ranges: [number, number][] = [];
-  let start = sorted[0];
-  let end = sorted[0];
-
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] === end + 1) {
-      end = sorted[i];
+  for (const id of sorted) {
+    const last = ranges[ranges.length - 1];
+    if (last && id === last[1] + 1) {
+      last[1] = id;
     } else {
-      ranges.push([start, end]);
-      start = sorted[i];
-      end = sorted[i];
+      ranges.push([id, id]);
     }
   }
-  ranges.push([start, end]);
 
-  writer.writeInt(ranges.length, 6);
-  for (const [s, e] of ranges) {
-    if (s === e) {
-      writer.writeBool(false); // single
-      fibonacciEncode(writer, s);
+  writer.writeInt(ranges.length, 12);
+  let offset = 0;
+  for (const [start, end] of ranges) {
+    if (start === end) {
+      writer.writeBool(false);
+      fibonacciEncode(writer, start - offset);
     } else {
-      writer.writeBool(true); // group/range
-      fibonacciEncode(writer, s);
-      fibonacciEncode(writer, e);
+      writer.writeBool(true);
+      fibonacciEncode(writer, start - offset);
+      fibonacciEncode(writer, end - start);
     }
+    offset = end;
   }
 }
 
-/** Read a range-encoded list of IDs with Fibonacci integers. */
+/** Read a Fibonacci integer range of IDs. */
 function readIdRange(reader: BitReader): number[] {
-  const numEntries = reader.readInt(6);
+  const numEntries = reader.readInt(12);
   const ids: number[] = [];
+  let offset = 0;
 
   for (let i = 0; i < numEntries; i++) {
     const isGroup = reader.readBool();
+    const start = fibonacciDecode(reader) + offset;
     if (isGroup) {
-      const start = fibonacciDecode(reader);
-      const end = fibonacciDecode(reader);
+      const end = fibonacciDecode(reader) + start;
       for (let id = start; id <= end; id++) {
         ids.push(id);
       }
+      offset = end;
     } else {
-      ids.push(fibonacciDecode(reader));
+      ids.push(start);
+      offset = start;
     }
   }
 
