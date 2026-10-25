@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
@@ -88,44 +88,41 @@ class ScanResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class ExpectedCookieRequest(BaseModel):
+    name: str
+    category: str | None = None
+
+
+class ValidationExpectations(BaseModel):
+    """What the site has switched on, from its live configuration."""
+
+    tcf_enabled: bool = False
+    cookies: list[ExpectedCookieRequest] = Field(default_factory=list)
+
+
 class ValidationRequest(BaseModel):
-    """Request for consent validation and dark pattern detection."""
+    """Request to check a site's consent setup."""
 
     url: str
-    essential_cookie_names: list[str] = Field(default_factory=list)
-    proxy: ProxyRequest | None = None
+    expect: ValidationExpectations = Field(default_factory=ValidationExpectations)
 
 
-class ValidationIssueResponse(BaseModel):
-    """A single validation issue."""
-
-    check: str
-    severity: str
-    message: str
-    recommendation: str
-    details: dict = Field(default_factory=dict)
-
-
-class DarkPatternIssueResponse(BaseModel):
-    """A detected dark pattern."""
-
-    pattern: str
-    severity: str
-    message: str
-    recommendation: str
-    details: dict = Field(default_factory=dict)
+class ConsentCheckResponse(BaseModel):
+    key: str
+    phase: Literal["before_consent", "after_accept", "after_reject"]
+    label: str
+    status: Literal["passed", "failed", "inconclusive", "not_applicable"]
+    detail: str | None = None
+    fix: str | None = None
+    evidence: dict = Field(default_factory=dict)
 
 
 class ValidationResponse(BaseModel):
-    """Result of consent validation and dark pattern detection."""
+    """The site's consent checks."""
 
     url: str
-    pre_consent_issues: list[ValidationIssueResponse] = Field(default_factory=list)
-    post_accept_issues: list[ValidationIssueResponse] = Field(default_factory=list)
-    post_reject_issues: list[ValidationIssueResponse] = Field(default_factory=list)
-    dark_pattern_issues: list[DarkPatternIssueResponse] = Field(default_factory=list)
-    banner_found: bool = False
-    errors: list[str] = Field(default_factory=list)
+    checks: list[ConsentCheckResponse] = Field(default_factory=list)
+    error: str | None = None
 
 
 def build_scan_response(result: SiteCrawlResult) -> ScanResponse:
@@ -334,162 +331,29 @@ def create_app():  # noqa: ANN201
 
     @app.post("/validate", response_model=ValidationResponse)
     async def run_validation(body: ValidationRequest) -> ValidationResponse:
-        """Run consent signal validation and dark pattern detection."""
-        from playwright.async_api import async_playwright
+        """Visit a page as a new visitor, accept and reject, and check what happens."""
+        from dataclasses import asdict
 
-        from src.consent_validator import (
-            _is_tracker_request,
-            validate_post_accept,
-            validate_post_reject,
-            validate_pre_consent,
-        )
-        from src.crawler import ProxyConfig
-        from src.dark_pattern_detector import detect_dark_patterns
+        from src.consent_validator import Expectations, ExpectedCookie, run_consent_checks
 
         if urlparse(body.url).scheme not in ALLOWED_SCHEMES:
             raise HTTPException(status_code=400, detail="URL must use http or https")
+        policy = NavigationPolicy(allow_private_networks=settings.scanner_allow_private_networks)
+        if not await policy.is_allowed(body.url):
+            raise HTTPException(status_code=400, detail="URL is not permitted")
 
-        response = ValidationResponse(url=body.url)
-        essential_names = set(body.essential_cookie_names)
-        tracker_requests: list[str] = []
-
-        proxy_config = None
-        if body.proxy:
-            proxy_config = ProxyConfig(
-                server=body.proxy.server,
-                username=body.proxy.username,
-                password=body.proxy.password,
-            )
-
-        try:
-            async with async_playwright() as pw:
-                launch_kwargs: dict = {"headless": settings.crawler_headless}
-                if proxy_config:
-                    proxy_opts: dict = {"server": proxy_config.server}
-                    if proxy_config.username:
-                        proxy_opts["username"] = proxy_config.username
-                    if proxy_config.password:
-                        proxy_opts["password"] = proxy_config.password
-                    launch_kwargs["proxy"] = proxy_opts
-
-                browser = await pw.chromium.launch(**launch_kwargs)
-                try:
-                    context = await browser.new_context(
-                        ignore_https_errors=True, service_workers="block"
-                    )
-                    await NavigationPolicy(
-                        allow_private_networks=settings.scanner_allow_private_networks
-                    ).apply(context)
-                    page = await context.new_page()
-
-                    # Track network requests for tracker detection
-                    def _on_request(request) -> None:
-                        if _is_tracker_request(request.url):
-                            tracker_requests.append(request.url)
-
-                    page.on("request", _on_request)
-
-                    # ── Pre-consent check ────────────────────────
-                    await page.goto(
-                        body.url,
-                        wait_until="networkidle",
-                        timeout=settings.crawler_timeout_ms,
-                    )
-
-                    pre_issues = await validate_pre_consent(
-                        page, context, essential_names, tracker_requests
-                    )
-                    response.pre_consent_issues = [
-                        ValidationIssueResponse(**vars(i)) for i in pre_issues
-                    ]
-
-                    # ── Dark pattern detection ───────────────────
-                    dp_result = await detect_dark_patterns(page)
-                    response.banner_found = dp_result.banner_found
-                    response.dark_pattern_issues = [
-                        DarkPatternIssueResponse(**vars(i)) for i in dp_result.issues
-                    ]
-
-                    # ── Post-accept check ────────────────────────
-                    # Try to click Accept All
-                    accept_selectors = [
-                        "button:has-text('Accept All')",
-                        "button:has-text('Accept')",
-                        "button:has-text('Allow All')",
-                        "button:has-text('I Agree')",
-                        "[data-action='accept']",
-                    ]
-                    accepted = False
-                    for selector in accept_selectors:
-                        try:
-                            btn = page.locator(selector).first
-                            if await btn.is_visible(timeout=1000):
-                                await btn.click()
-                                await page.wait_for_timeout(2000)
-                                accepted = True
-                                break
-                        except Exception:
-                            continue
-
-                    if accepted:
-                        tracker_requests.clear()
-                        post_accept = await validate_post_accept(page, context)
-                        response.post_accept_issues = [
-                            ValidationIssueResponse(**vars(i)) for i in post_accept
-                        ]
-
-                    # ── Post-reject check ────────────────────────
-                    # Reload and reject
-                    await context.clear_cookies()
-                    tracker_requests.clear()
-                    await page.goto(
-                        body.url,
-                        wait_until="networkidle",
-                        timeout=settings.crawler_timeout_ms,
-                    )
-
-                    reject_selectors = [
-                        "button:has-text('Reject All')",
-                        "button:has-text('Reject')",
-                        "button:has-text('Decline')",
-                        "button:has-text('Deny')",
-                        "[data-action='reject']",
-                    ]
-                    rejected = False
-                    for selector in reject_selectors:
-                        try:
-                            btn = page.locator(selector).first
-                            if await btn.is_visible(timeout=1000):
-                                await btn.click()
-                                await page.wait_for_timeout(2000)
-                                rejected = True
-                                break
-                        except Exception:
-                            continue
-
-                    if rejected:
-                        post_reject_trackers: list[str] = []
-                        # Collect any new tracker requests after rejection
-                        for req_url in tracker_requests:
-                            if _is_tracker_request(req_url):
-                                post_reject_trackers.append(req_url)
-
-                        post_reject = await validate_post_reject(
-                            page, context, essential_names, post_reject_trackers
-                        )
-                        response.post_reject_issues = [
-                            ValidationIssueResponse(**vars(i)) for i in post_reject
-                        ]
-
-                    await context.close()
-                finally:
-                    await browser.close()
-
-        except Exception as exc:
-            response.errors.append(str(exc))
-            logger.warning("Validation failed for %s: %s", body.url, exc)
-
-        return response
+        expect = Expectations(
+            tcf_enabled=body.expect.tcf_enabled,
+            cookies=[ExpectedCookie(c.name, c.category) for c in body.expect.cookies],
+        )
+        result = await run_consent_checks(
+            body.url,
+            expect,
+            headless=settings.crawler_headless,
+            timeout_ms=settings.crawler_timeout_ms,
+            policy=policy,
+        )
+        return ValidationResponse.model_validate(asdict(result))
 
     return app
 

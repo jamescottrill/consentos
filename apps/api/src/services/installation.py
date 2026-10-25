@@ -143,7 +143,8 @@ def installation_state(installation: SiteInstallation | None) -> InstallState:
 
 # ── Checks ───────────────────────────────────────────────────────────
 
-CheckStatus = Literal["passed", "failed", "skipped"]
+CheckStatus = Literal["passed", "failed", "skipped", "inconclusive"]
+CheckGroup = Literal["installation", "consent"]
 
 
 def _check(
@@ -154,15 +155,66 @@ def _check(
     fix: str | None = None,
     detail: str | None = None,
     severity: Literal["error", "warning"] = "error",
+    group: CheckGroup = "installation",
 ) -> dict:
     return {
         "key": key,
         "label": label,
         "status": status,
         "severity": severity,
+        "group": group,
         "detail": detail,
         "fix": fix if status == "failed" else None,
     }
+
+
+def consent_expectations(snapshot: dict | None) -> dict:
+    """What the consent checks should expect, from the site's live revision.
+
+    An unpublished site serves the built-in defaults and has no classified
+    cookies, so every cookie it sets comes out as unclassified.
+    """
+    if not snapshot:
+        return {"tcf_enabled": False, "cookies": []}
+    config = snapshot.get("config") or {}
+    return {
+        "tcf_enabled": bool(config.get("tcf_enabled")),
+        "cookies": [
+            {"name": c["name"], "category": c.get("category")}
+            for c in snapshot.get("cookies") or []
+        ],
+    }
+
+
+def consent_check_items(found: dict) -> list[dict]:
+    """The scanner's consent checks as Check now items.
+
+    Checks that don't apply to the site's settings aren't shown.
+    """
+    return [
+        _check(
+            c["key"],
+            c["label"],
+            c["status"],
+            fix=c.get("fix"),
+            detail=c.get("detail"),
+            group="consent",
+        )
+        for c in found.get("checks", [])
+        if c.get("status") != "not_applicable"
+    ]
+
+
+def consent_checks_unavailable() -> list[dict]:
+    return [
+        _check(
+            "consent",
+            "Consent checks",
+            "inconclusive",
+            detail="We couldn't run the consent checks this time. Try again shortly.",
+            group="consent",
+        )
+    ]
 
 
 def _same_base(a: str | None, b: str | None) -> bool:
@@ -175,13 +227,16 @@ def diagnose(
     *,
     expected_api_base: str | None,
     checked_at: datetime,
+    consent: list[dict] | None = None,
 ) -> dict:
     """Turn what the scanner found on a page into checks with fixes.
 
     ``found`` is the scanner's ``/check-install`` response.
     ``expected_api_base`` is the deployment's public API address, or None
     when it isn't configured, in which case the address is judged by
-    whether the banner could fetch its configuration.
+    whether the banner could fetch its configuration. ``consent`` is the
+    consent check items, or None when they weren't run because the banner
+    didn't appear.
     """
     checks: list[dict] = []
     skip = False
@@ -317,6 +372,11 @@ def diagnose(
             "the site for errors."
         ),
     )
+
+    if consent is None:
+        checks.append(_check("consent", "Consent checks", "skipped", group="consent"))
+    else:
+        checks.extend(consent)
 
     skip = False
     add(
