@@ -27,6 +27,8 @@ def _load(name: str):
     return module
 
 
+from tests.test_migration_0013_backfill import restore_schema_at_0013  # noqa: E402
+
 migration_0013 = _load("0013_site_config_revisions")
 migration_0015 = _load("0015_site_setup")
 
@@ -35,6 +37,7 @@ migration_0015 = _load("0015_site_setup")
 async def session(_test_engine, _setup_db):
     async with _test_engine.connect() as conn:
         transaction = await conn.begin()
+        await restore_schema_at_0013(conn)
         async with AsyncSession(bind=conn, expire_on_commit=False) as db:
             yield db
         await transaction.rollback()

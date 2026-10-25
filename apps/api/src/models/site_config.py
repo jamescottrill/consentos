@@ -41,7 +41,6 @@ class SiteConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Google Consent Mode
     gcm_enabled: Mapped[bool | None] = mapped_column(default=True, nullable=True)
-    gcm_default: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Shopify Customer Privacy API
     shopify_privacy_enabled: Mapped[bool | None] = mapped_column(default=False, nullable=True)

@@ -34,7 +34,6 @@ const BASE_CONFIG: SiteConfig = {
   gpc_jurisdictions: null,
   gpc_global_honour: false,
   gcm_enabled: true,
-  gcm_default: null,
   shopify_privacy_enabled: false,
   banner_config: null,
   privacy_policy_url: null,

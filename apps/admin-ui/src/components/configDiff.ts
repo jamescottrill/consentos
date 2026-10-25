@@ -11,7 +11,6 @@ const FIELD_LABELS: Record<string, string> = {
   gpc_jurisdictions: 'GPC jurisdictions',
   gpc_global_honour: 'Honour GPC everywhere',
   gcm_enabled: 'Google Consent Mode',
-  gcm_default: 'Google Consent Mode defaults',
   shopify_privacy_enabled: 'Shopify Customer Privacy',
   privacy_policy_url: 'Privacy policy link',
   terms_url: 'Terms link',

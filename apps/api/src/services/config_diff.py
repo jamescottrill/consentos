@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from src.services.config_snapshot import without_retired_fields
+
 # Snapshot config fields by admin UI area. Anything not listed is a
 # setting.
 _FIELD_AREAS = {
@@ -54,8 +56,8 @@ def diff_versions(before: Version, after: Version) -> list[Change]:
 
 
 def _config_changes(before: Version, after: Version) -> list[Change]:
-    old = before.snapshot.get("config", {})
-    new = after.snapshot.get("config", {})
+    old = without_retired_fields(before.snapshot).get("config", {})
+    new = without_retired_fields(after.snapshot).get("config", {})
     changes = [
         Change(
             area=_FIELD_AREAS.get(key, "settings"),

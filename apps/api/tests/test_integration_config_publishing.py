@@ -852,3 +852,64 @@ class TestPublishService:
                 await publish_draft(
                     session, site_id, expected_content_hash=status.content_hash, published_by=None
                 )
+
+
+@requires_db
+class TestRetiredFields:
+    """Revisions published before a field was removed still hold it."""
+
+    async def _live_with_gcm_default(self, db_client, auth_headers, engine) -> str:
+        from src.models.site import Site
+        from src.services.config_snapshot import content_hash
+
+        site_id = await create_test_site(db_client, auth_headers)
+        await _publish_draft(db_client, auth_headers, site_id)
+        async with AsyncSession(engine) as session:
+            live = await get_live_revision(session, uuid.UUID(site_id))
+            snapshot = {
+                **live.snapshot,
+                "config": {**live.snapshot["config"], "gcm_default": {"ad_storage": "denied"}},
+            }
+            site_layer = {
+                **live.site_layer,
+                "site_config": {**live.site_layer["site_config"], "gcm_default": None},
+            }
+            older = SiteConfigRevision(
+                site_id=live.site_id,
+                number=live.number + 1,
+                consent_version=live.consent_version,
+                snapshot=snapshot,
+                site_layer=site_layer,
+                sources=live.sources,
+                content_hash=content_hash(snapshot),
+            )
+            session.add(older)
+            await session.flush()
+            site = await session.get(Site, live.site_id)
+            site.live_revision_id = older.id
+            await session.commit()
+        return site_id
+
+    async def test_they_do_not_count_as_unpublished_changes(
+        self, db_client, auth_headers, _test_engine
+    ):
+        site_id = await self._live_with_gcm_default(db_client, auth_headers, _test_engine)
+        draft = await _draft(db_client, auth_headers, site_id)
+        assert draft["has_unpublished_changes"] is False
+
+        resp = await _publish(db_client, auth_headers, site_id, draft["content_hash"])
+        assert resp.status_code == 409, resp.text
+
+    async def test_discarding_against_them_works(self, db_client, auth_headers, _test_engine):
+        site_id = await self._live_with_gcm_default(db_client, auth_headers, _test_engine)
+        await _edit(db_client, auth_headers, site_id, privacy_policy_url="https://x.test/p")
+
+        resp = await db_client.post(f"/api/v1/config/sites/{site_id}/discard", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["has_unpublished_changes"] is False
+
+    async def test_they_are_left_out_of_the_diff(self, db_client, auth_headers, _test_engine):
+        site_id = await self._live_with_gcm_default(db_client, auth_headers, _test_engine)
+        resp = await db_client.get(f"/api/v1/config/sites/{site_id}/diff", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert "gcm_default" not in resp.text

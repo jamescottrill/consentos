@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.cookie import Cookie, CookieAllowListEntry, CookieCategory
@@ -23,7 +23,11 @@ from src.models.site_group import SiteGroup
 from src.models.site_group_config import SiteGroupConfig
 from src.models.translation import Translation
 from src.services.config_publishing import get_draft_status
-from src.services.config_snapshot import build_site_snapshot
+from src.services.config_snapshot import (
+    build_site_snapshot,
+    comparable_hash,
+    without_retired_fields,
+)
 from tests.conftest import requires_db
 
 _MIGRATION = Path(__file__).parents[1] / "alembic" / "versions" / "0013_site_config_revisions.py"
@@ -43,9 +47,19 @@ migration = _load_migration()
 async def session(_test_engine, _setup_db):
     async with _test_engine.connect() as conn:
         transaction = await conn.begin()
+        await restore_schema_at_0013(conn)
         async with AsyncSession(bind=conn, expire_on_commit=False) as db:
             yield db
         await transaction.rollback()
+
+
+async def restore_schema_at_0013(conn) -> None:
+    """Add back the columns later migrations dropped, as 0013 saw them.
+
+    Rolled back with the rest of the test's transaction.
+    """
+    for table in ("site_configs", "site_group_configs", "org_configs"):
+        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN gcm_default JSONB"))
 
 
 async def _site(db: AsyncSession, org: Organisation, *, group=None, config=True, **site) -> Site:
@@ -134,10 +148,13 @@ class TestBackfill:
         assert revision.requires_reconsent is False
         assert revision.published_by is None
         assert revision.consent_version == config_id
-        assert revision.snapshot == expected.snapshot
+        # v1 still holds fields retired since, which comparisons leave out.
+        assert without_retired_fields(revision.snapshot) == expected.snapshot
+        # The site's own values still include gcm_default, as the column did.
+        assert revision.site_layer["site_config"].pop("gcm_default") is None
         assert revision.site_layer == expected.site_layer
         assert revision.sources == expected.sources
-        assert revision.content_hash == expected.content_hash
+        assert comparable_hash(revision.snapshot, revision.content_hash) == expected.content_hash
         assert (await get_draft_status(db, site.id)).has_unpublished_changes is False
 
     async def test_site_without_parents(self, session):
@@ -150,7 +167,9 @@ class TestBackfill:
         await _backfill(db)
 
         revision = await _live(db, site)
-        assert revision.content_hash == (await build_site_snapshot(db, site.id)).content_hash
+        assert comparable_hash(revision.snapshot, revision.content_hash) == (
+            (await build_site_snapshot(db, site.id)).content_hash
+        )
 
     async def test_which_sites_get_v1(self, session):
         db = session

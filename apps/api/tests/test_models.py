@@ -72,7 +72,7 @@ def test_site_unique_constraint():
 def test_site_config_jsonb_fields():
     mapper = inspect(SiteConfig)
     column_names = {c.key for c in mapper.columns}
-    for field in ["regional_modes", "gcm_default", "banner_config"]:
+    for field in ["regional_modes", "banner_config"]:
         assert field in column_names, f"Missing JSONB field: {field}"
 
 

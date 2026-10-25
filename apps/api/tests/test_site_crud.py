@@ -87,7 +87,6 @@ class TestSiteConfigSchemas:
             tcf_enabled=False,
             tcf_publisher_cc=None,
             gcm_enabled=True,
-            gcm_default=None,
             banner_config=None,
             privacy_policy_url=None,
             scan_schedule_cron=None,

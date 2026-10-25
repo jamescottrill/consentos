@@ -65,7 +65,6 @@ class SiteConfigCreate(BaseModel):
     gpc_jurisdictions: list[str] | None = None
     gpc_global_honour: bool = False
     gcm_enabled: bool = True
-    gcm_default: dict | None = None
     shopify_privacy_enabled: bool = False
     banner_config: BannerConfig | None = None
     privacy_policy_url: str | None = None
@@ -98,7 +97,6 @@ class SiteConfigUpdate(BaseModel):
     gpc_jurisdictions: list[str] | None = None
     gpc_global_honour: bool | None = None
     gcm_enabled: bool | None = None
-    gcm_default: dict | None = None
     shopify_privacy_enabled: bool | None = None
     banner_config: BannerConfig | None = None
     privacy_policy_url: str | None = None
@@ -145,7 +143,6 @@ class SiteConfigResponse(BaseModel):
     gpc_jurisdictions: list[str] | None = None
     gpc_global_honour: bool = False
     gcm_enabled: bool
-    gcm_default: dict | None = None
     shopify_privacy_enabled: bool = False
     banner_config: dict | None = None
     privacy_policy_url: str | None = None

@@ -26,7 +26,6 @@ const baseConfig: SiteConfig = {
   gpc_jurisdictions: [],
   gpc_global_honour: false,
   gcm_enabled: false,
-  gcm_default: null,
   shopify_privacy_enabled: false,
   banner_config: null,
   privacy_policy_url: null,

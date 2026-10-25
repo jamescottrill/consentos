@@ -171,7 +171,7 @@ consent-platform/
 - **organisations** — multi-tenant root, each org has multiple sites
 - **users** — org-scoped with roles: owner, admin, editor, viewer
 - **sites** — a domain being managed (e.g. example.com), belongs to an org
-- **site_configs** — full configuration per site: blocking mode, TCF settings, GCM defaults, banner config JSON, scan schedule, consent expiry
+- **site_configs** — full configuration per site: blocking mode, TCF settings, Consent Mode on or off, banner config JSON, scan schedule, consent expiry
 - **cookie_categories** — taxonomy (necessary, functional, analytics, marketing, personalisation) with TCF purpose and GCM consent type mappings
 - **cookies** — discovered cookies per site with metadata, vendor, category, review status
 - **cookie_allow_list** — approved cookies per site with category assignment
