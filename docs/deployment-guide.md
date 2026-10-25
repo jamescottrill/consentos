@@ -734,6 +734,10 @@ Scheduled scans now use the site's page limit and are skipped while a scan is al
 
 A running scan is now only treated as lost when it has recorded no progress for 10 minutes, rather than 10 minutes after it started, and `SCANNER_TIMEOUT_SECONDS` now limits the wait for each page rather than the whole scan. Large sites that used to fail partway through now finish.
 
+### Consent checks
+
+**Check now** also checks what happens when a visitor accepts or rejects, through the scanner's `POST /validate` endpoint, so upgrade the scanner with the API. Each check now reports passed, failed, inconclusive or not applicable. `POST /validate` takes the site's expected settings and returns a list of checks, replacing the old `pre_consent_issues`, `post_accept_issues`, `post_reject_issues` and `dark_pattern_issues` lists. Anything else calling `POST /validate` needs updating.
+
 ### Consent and cookie reports are checked against the site's domains
 
 Consent records and cookie reports are only accepted from the site's domain and its additional domains, including their subdomains. The API checks the request's `Origin` header (or `Referer` when `Origin` is absent or `null`) and, for cookie reports, the reported page URL. Requests from any other domain are rejected with `403`, and each rejection is logged at warning level with the site ID and the rejected host. Consent and cookie reports for inactive sites are rejected with `404`.

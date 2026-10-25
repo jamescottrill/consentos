@@ -68,3 +68,22 @@ The site is marked installed the first time a page on one of its domains loads t
 | This site's configuration is published | A warning only: visitors see the built-in banner until you publish. |
 
 Each failure comes with a fix. The result is kept, so the next person to open the site sees it too. Owners, admins and editors can run a check.
+
+### Consent checks
+
+When the banner appears, **Check now** also visits the page twice more, in a fresh browser each time: once to accept and once to reject. It then checks what happened against the site's published configuration:
+
+| Check | What it means when it fails |
+| --- | --- |
+| No optional cookies are set before the visitor chooses | A cookie in a category other than necessary was set before any choice. |
+| No trackers load before the visitor chooses | A known tracker, such as Meta or Hotjar, loaded before any choice. |
+| Accepting is remembered | The banner didn't save the choice, so the visitor is asked again on every page. |
+| Rejecting is remembered | As above, for Reject. |
+| No optional cookies are set after Reject | An optional cookie was set even though the visitor rejected. |
+| No trackers load after Reject | A known tracker loaded after the visitor rejected. |
+| TCF reports no consent before the visitor chooses, and after Reject | The TCF API reported consent the visitor hadn't given. Only checked when TCF is on. |
+| TCF reports consent after Accept | The TCF API still reported no consent after Accept. Only checked when TCF is on. |
+
+A check shows **Couldn't check** when it couldn't see what it needed: for example, when the page didn't load or the banner's Reject button couldn't be found. It never counts as passed. A cookie that hasn't been classified yet also makes its check inconclusive, because there's no way to tell whether it's allowed, so review new cookies on the **Cookies** tab. Checks for features the site doesn't use, such as TCF, aren't shown.
+
+A failed consent check marks the site **Problem found**, like a failed installation check.

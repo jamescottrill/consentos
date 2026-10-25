@@ -336,8 +336,10 @@ export type InstallationState = 'not_detected' | 'installed' | 'problem';
 export interface InstallationCheckItem {
   key: string;
   label: string;
-  status: 'passed' | 'failed' | 'skipped';
+  status: 'passed' | 'failed' | 'skipped' | 'inconclusive';
   severity: 'error' | 'warning';
+  /** Absent on checks stored before consent checks existed. */
+  group?: 'installation' | 'consent';
   detail: string | null;
   fix: string | null;
 }

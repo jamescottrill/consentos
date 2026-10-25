@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -10,7 +11,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from src.services.installation import diagnose, installation_state, page_without_query
+from src.services.installation import (
+    consent_check_items,
+    consent_expectations,
+    diagnose,
+    installation_state,
+    page_without_query,
+)
 
 try:
     from tests.conftest import create_test_site, publish_site, requires_db
@@ -142,13 +149,46 @@ def _found(site_id: str, domain: str, **overrides) -> dict:
     }
 
 
-def _scanner(found: dict | None = None, *, status_code: int = 200, down: bool = False):
+CONSENT_PASSED = {
+    "url": "https://example.com/",
+    "checks": [
+        {
+            "key": "before_consent.cookies",
+            "phase": "before_consent",
+            "label": "No optional cookies are set before the visitor chooses",
+            "status": "passed",
+        },
+        {
+            "key": "before_consent.tcf",
+            "phase": "before_consent",
+            "label": "TCF reports no consent before the visitor chooses",
+            "status": "not_applicable",
+        },
+    ],
+}
+
+
+def _scanner(
+    found: dict | None = None,
+    *,
+    status_code: int = 200,
+    down: bool = False,
+    consent: dict | None = None,
+    consent_down: bool = False,
+    validate_requests: list | None = None,
+):
     """Patch the router's HTTP client to answer like the scanner."""
     real_client = httpx.AsyncClient
 
     def handler(request: httpx.Request) -> httpx.Response:
         if down:
             raise httpx.ConnectError("refused")
+        if request.url.path == "/validate":
+            if validate_requests is not None:
+                validate_requests.append(json.loads(request.content))
+            if consent_down:
+                raise httpx.ConnectError("refused")
+            return httpx.Response(200, json=consent or CONSENT_PASSED)
         assert request.url.path == "/check-install"
         return httpx.Response(status_code, json=found or {})
 
@@ -212,6 +252,72 @@ class TestCheckNow:
         )
         assert resp.status_code == 422
 
+    async def test_consent_checks_are_added_without_those_that_do_not_apply(
+        self, db_client, auth_headers
+    ):
+        site = await _site(db_client, auth_headers)
+        sent: list = []
+        with _scanner(_found(site["id"], site["domain"]), validate_requests=sent):
+            resp = await db_client.post(
+                f"/api/v1/sites/{site['id']}/installation/check", headers=auth_headers
+            )
+
+        consent = [c for c in resp.json()["last_check"]["checks"] if c["group"] == "consent"]
+        assert [c["key"] for c in consent] == ["before_consent.cookies"]
+        assert sent[0]["url"] == f"https://{site['domain']}/"
+        assert sent[0]["expect"] == {"tcf_enabled": False, "cookies": []}
+
+    async def test_a_failed_consent_check_is_a_problem(self, db_client, auth_headers):
+        site = await _site(db_client, auth_headers)
+        consent = {
+            "url": "https://example.com/",
+            "checks": [
+                {
+                    "key": "after_reject.trackers",
+                    "phase": "after_reject",
+                    "label": "No trackers load after Reject",
+                    "status": "failed",
+                    "fix": "These trackers loaded after the visitor rejected: facebook.net.",
+                }
+            ],
+        }
+        with _scanner(_found(site["id"], site["domain"]), consent=consent):
+            resp = await db_client.post(
+                f"/api/v1/sites/{site['id']}/installation/check", headers=auth_headers
+            )
+
+        data = resp.json()
+        assert data["state"] == "problem"
+        assert data["last_check"]["ok"] is False
+
+    async def test_consent_checks_are_skipped_when_the_banner_did_not_appear(
+        self, db_client, auth_headers
+    ):
+        site = await _site(db_client, auth_headers)
+        sent: list = []
+        found = _found(site["id"], site["domain"], banner_rendered=False)
+        with _scanner(found, validate_requests=sent):
+            resp = await db_client.post(
+                f"/api/v1/sites/{site['id']}/installation/check", headers=auth_headers
+            )
+
+        assert sent == []
+        [consent] = [c for c in resp.json()["last_check"]["checks"] if c["group"] == "consent"]
+        assert consent["status"] == "skipped"
+
+    async def test_consent_checks_failing_to_run_are_inconclusive(self, db_client, auth_headers):
+        site = await _site(db_client, auth_headers)
+        with _scanner(_found(site["id"], site["domain"]), consent_down=True):
+            resp = await db_client.post(
+                f"/api/v1/sites/{site['id']}/installation/check", headers=auth_headers
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        [consent] = [c for c in data["last_check"]["checks"] if c["group"] == "consent"]
+        assert consent["status"] == "inconclusive"
+        assert data["last_check"]["ok"] is True
+
     async def test_scanner_unavailable(self, db_client, auth_headers):
         site = await _site(db_client, auth_headers)
         with _scanner(down=True):
@@ -246,9 +352,19 @@ def _fake_site(*, published: bool = True):
     )
 
 
-def _diagnose(found: dict, *, published: bool = True, api_base: str | None = None) -> dict:
+def _diagnose(
+    found: dict,
+    *,
+    published: bool = True,
+    api_base: str | None = None,
+    consent: list[dict] | None = None,
+) -> dict:
     return diagnose(
-        _fake_site(published=published), found, expected_api_base=api_base, checked_at=NOW
+        _fake_site(published=published),
+        found,
+        expected_api_base=api_base,
+        checked_at=NOW,
+        consent=consent,
     )
 
 
@@ -262,7 +378,11 @@ def _fix(result: dict, key: str) -> str:
 
 class TestDiagnose:
     def test_everything_passes(self):
-        result = _diagnose(_found(str(SITE_ID), "example.com"), api_base="https://cmp.example.net")
+        result = _diagnose(
+            _found(str(SITE_ID), "example.com"),
+            api_base="https://cmp.example.net",
+            consent=consent_check_items(CONSENT_PASSED),
+        )
         assert result["ok"] is True
         assert set(_statuses(result).values()) == {"passed"}
 
@@ -278,6 +398,7 @@ class TestDiagnose:
             "first_in_head",
             "config_loaded",
             "banner_shown",
+            "consent",
             "published",
         ]
 
@@ -415,3 +536,57 @@ class TestInstallationState:
 
 def test_page_without_query():
     assert page_without_query("https://example.com/a/b?x=1#top") == "https://example.com/a/b"
+
+
+class TestConsentChecks:
+    def test_expectations_come_from_the_live_revision(self):
+        snapshot = {
+            "config": {"tcf_enabled": True},
+            "cookies": [{"name": "_ga", "domain": ".example.com", "category": "analytics"}],
+        }
+        assert consent_expectations(snapshot) == {
+            "tcf_enabled": True,
+            "cookies": [{"name": "_ga", "category": "analytics"}],
+        }
+
+    def test_an_unpublished_site_expects_nothing(self):
+        assert consent_expectations(None) == {"tcf_enabled": False, "cookies": []}
+
+    def test_checks_that_do_not_apply_are_dropped(self):
+        items = consent_check_items(CONSENT_PASSED)
+        assert [i["key"] for i in items] == ["before_consent.cookies"]
+        assert items[0]["group"] == "consent"
+
+    def test_an_inconclusive_check_keeps_its_reason_but_no_fix(self):
+        [item] = consent_check_items(
+            {
+                "checks": [
+                    {
+                        "key": "after_reject.saved",
+                        "label": "Rejecting is remembered",
+                        "status": "inconclusive",
+                        "detail": "We couldn't find the banner's Reject button.",
+                        "fix": "ignored",
+                    }
+                ]
+            }
+        )
+        assert item["detail"] == "We couldn't find the banner's Reject button."
+        assert item["fix"] is None
+
+    def test_diagnosis_places_consent_checks_before_the_publish_warning(self):
+        consent = consent_check_items(CONSENT_PASSED)
+        result = diagnose(
+            _fake_site(),
+            _found(str(SITE_ID), "example.com"),
+            expected_api_base=None,
+            checked_at=NOW,
+            consent=consent,
+        )
+        keys = [c["key"] for c in result["checks"]]
+        assert keys[-2:] == ["before_consent.cookies", "published"]
+
+    def test_without_consent_results_the_checks_show_as_skipped(self):
+        result = _diagnose(_found(str(SITE_ID), "example.com"))
+        [consent] = [c for c in result["checks"] if c["group"] == "consent"]
+        assert consent["status"] == "skipped"

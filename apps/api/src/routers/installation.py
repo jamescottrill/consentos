@@ -19,8 +19,12 @@ from src.schemas.installation import (
     InstallationResponse,
     InstallationSummary,
 )
+from src.services.config_publishing import get_live_revision
 from src.services.dependencies import require_role
 from src.services.installation import (
+    consent_check_items,
+    consent_checks_unavailable,
+    consent_expectations,
     diagnose,
     get_installation,
     installation_state,
@@ -35,6 +39,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sites", tags=["installation"])
 
 CHECK_TIMEOUT_SECONDS = 45
+# The consent checks load the page twice and wait for each choice to settle.
+CONSENT_CHECK_TIMEOUT_SECONDS = 120
 
 
 @router.get("/installations", response_model=list[InstallationSummary])
@@ -107,16 +113,38 @@ async def check_site_installation(
             detail="The scanner couldn't check the site. Try again shortly.",
         )
 
+    found = resp.json()
+    consent = (
+        await _consent_checks(site, url, db, settings.scanner_service_url)
+        if found.get("banner_rendered")
+        else None
+    )
+
     now = datetime.now(UTC)
     result = diagnose(
         site,
-        resp.json(),
+        found,
         expected_api_base=configured_base_url(settings.public_api_url),
         checked_at=now,
+        consent=consent,
     )
     await save_check(db, site_id, result, now)
     await db.commit()
     return _response(await get_installation(db, site_id))
+
+
+async def _consent_checks(site: Site, url: str, db: AsyncSession, scanner_url: str) -> list[dict]:
+    """Have the scanner accept and reject on the page, judged against the live revision."""
+    live = await get_live_revision(db, site.id)
+    expect = consent_expectations(live.snapshot if live else None)
+    try:
+        async with httpx.AsyncClient(timeout=CONSENT_CHECK_TIMEOUT_SECONDS) as client:
+            resp = await client.post(f"{scanner_url}/validate", json={"url": url, "expect": expect})
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("Consent checks for site %s failed: %s", site.id, exc)
+        return consent_checks_unavailable()
+    return consent_check_items(resp.json())
 
 
 async def _get_org_site(

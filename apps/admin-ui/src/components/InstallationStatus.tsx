@@ -66,7 +66,8 @@ export default function InstallationStatus({ siteId }: Props) {
 
       {check.isPending && (
         <p className="text-sm text-text-secondary" role="status">
-          Loading your home page as a new visitor. This can take up to a minute.
+          Loading your home page as a new visitor, then accepting and rejecting. This can take
+          a couple of minutes.
         </p>
       )}
       {check.isError && (
@@ -79,11 +80,8 @@ export default function InstallationStatus({ siteId }: Props) {
             Checked {installation.last_check.url} on{' '}
             {new Date(installation.last_check.checked_at).toLocaleString()}
           </p>
-          <ul className="space-y-2">
-            {installation.last_check.checks.map((item) => (
-              <CheckRow key={item.key} item={item} />
-            ))}
-          </ul>
+          <CheckList items={installation.last_check.checks.filter((c) => c.group !== 'consent')} />
+          <ConsentChecks items={installation.last_check.checks.filter((c) => c.group === 'consent')} />
         </div>
       )}
     </div>
@@ -104,7 +102,29 @@ const MARKS = {
   failed: { symbol: '✗', className: 'text-status-error-fg', label: 'Failed' },
   warning: { symbol: '!', className: 'text-status-warning-fg', label: 'Warning' },
   skipped: { symbol: '–', className: 'text-text-tertiary', label: 'Not checked' },
+  inconclusive: { symbol: '?', className: 'text-text-secondary', label: "Couldn't check" },
 };
+
+function CheckList({ items }: { items: InstallationCheckItem[] }) {
+  return (
+    <ul className="space-y-2">
+      {items.map((item) => (
+        <CheckRow key={item.key} item={item} />
+      ))}
+    </ul>
+  );
+}
+
+/** What happens when a visitor accepts or rejects, below the installation checks. */
+function ConsentChecks({ items }: { items: InstallationCheckItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <h4 className="mb-2 text-sm font-medium text-foreground">Consent checks</h4>
+      <CheckList items={items} />
+    </div>
+  );
+}
 
 function CheckRow({ item }: { item: InstallationCheckItem }) {
   const mark =
@@ -117,6 +137,9 @@ function CheckRow({ item }: { item: InstallationCheckItem }) {
       <div className={item.status === 'skipped' ? 'text-text-tertiary' : 'text-foreground'}>
         <p>{item.label}</p>
         {item.fix && <p className="mt-0.5 text-text-secondary">{item.fix}</p>}
+        {item.status === 'inconclusive' && item.detail && (
+          <p className="mt-0.5 text-text-secondary">{item.detail}</p>
+        )}
         {/* Only worth showing when the loader was added by another script. */}
         {item.key === 'snippet_present' && item.status === 'passed' && item.detail && (
           <p className="mt-0.5 text-xs text-text-secondary">{item.detail}</p>

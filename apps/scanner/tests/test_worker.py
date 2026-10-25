@@ -228,43 +228,76 @@ def _mock_playwright(context):
     return MagicMock(return_value=manager), browser
 
 
+def test_validate_rejects_private_hosts(client):
+    resp = client.post("/validate", json={"url": "http://127.0.0.1/"})
+    assert resp.status_code == 400
+
+
+@patch("src.navigation.NavigationPolicy.is_allowed", new_callable=AsyncMock, return_value=True)
+@patch("src.consent_validator.run_consent_checks", new_callable=AsyncMock)
+def test_validate_passes_expectations_and_returns_checks(mock_run, _allowed, client):
+    from src.consent_validator import CheckResult, ValidationResult
+
+    mock_run.return_value = ValidationResult(
+        url="https://example.com/",
+        checks=[
+            CheckResult("after_accept.saved", "after_accept", "Accepting is remembered", "passed")
+        ],
+    )
+
+    resp = client.post(
+        "/validate",
+        json={
+            "url": "https://example.com/",
+            "expect": {"tcf_enabled": True, "cookies": [{"name": "_ga", "category": "analytics"}]},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["checks"][0]["status"] == "passed"
+    expect = mock_run.await_args.args[1]
+    assert expect.tcf_enabled is True
+    assert expect.cookies[0].name == "_ga"
+
+
 @pytest.mark.parametrize("opt_out", [False, True])
-def test_validate_applies_navigation_policy(monkeypatch, opt_out):
-    """The validation browser context gets the route guard unless opted out."""
+async def test_consent_checks_guard_navigation_and_record_from_the_start(monkeypatch, opt_out):
+    """Each visit gets the route guard unless opted out, and the recorder script."""
     from unittest.mock import MagicMock
 
-    from src.dark_pattern_detector import DarkPatternResult
+    from src.consent_validator import Expectations, run_consent_checks
+    from src.navigation import NavigationPolicy
 
-    monkeypatch.setenv("SCANNER_ALLOW_PRIVATE_NETWORKS", str(opt_out).lower())
     page = AsyncMock()
     page.on = MagicMock()
+    page.goto = AsyncMock(return_value=MagicMock(status=200))
+    page.evaluate = AsyncMock(return_value={"consent": [], "tcf": None})
     locator = MagicMock()
     locator.first.is_visible = AsyncMock(return_value=True)
     locator.first.click = AsyncMock()
     page.locator = MagicMock(return_value=locator)
     context = AsyncMock()
     context.new_page = AsyncMock(return_value=page)
+    context.cookies = AsyncMock(return_value=[])
     playwright_factory, browser = _mock_playwright(context)
 
-    with (
-        patch("playwright.async_api.async_playwright", playwright_factory),
-        patch("src.consent_validator.validate_pre_consent", AsyncMock(return_value=[])),
-        patch("src.consent_validator.validate_post_accept", AsyncMock(return_value=[])),
-        patch("src.consent_validator.validate_post_reject", AsyncMock(return_value=[])),
-        patch(
-            "src.dark_pattern_detector.detect_dark_patterns",
-            AsyncMock(
-                return_value=DarkPatternResult(url="https://example.com/", banner_found=True)
-            ),
-        ),
-    ):
-        resp = TestClient(create_app()).post("/validate", json={"url": "https://example.com/"})
+    with patch("playwright.async_api.async_playwright", playwright_factory):
+        result = await run_consent_checks(
+            "https://example.com/",
+            Expectations(),
+            headless=True,
+            timeout_ms=1_000,
+            policy=NavigationPolicy(allow_private_networks=opt_out),
+            settle_ms=0,
+        )
 
-    assert resp.status_code == 200
-    assert resp.json()["errors"] == []
-    assert resp.json()["banner_found"] is True
+    assert result.error is None
+    assert browser.new_context.await_count == 2
     assert context.route.called is not opt_out
+    assert context.add_init_script.await_count == 2
     assert browser.new_context.await_args.kwargs["service_workers"] == "block"
+    statuses = {c.key: c.status for c in result.checks}
+    assert statuses["after_accept.saved"] == "failed"
 
 
 # ── Streamed scan ────────────────────────────────────────────────────

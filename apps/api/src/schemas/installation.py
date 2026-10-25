@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field
 class InstallationCheckItem(BaseModel):
     key: str
     label: str
-    status: Literal["passed", "failed", "skipped"]
+    status: Literal["passed", "failed", "skipped", "inconclusive"]
     severity: Literal["error", "warning"]
+    group: Literal["installation", "consent"] = "installation"
     detail: str | None = None
     fix: str | None = Field(default=None, description="How to put it right, when it failed.")
 

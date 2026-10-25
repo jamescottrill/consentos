@@ -123,6 +123,62 @@ describe('InstallationStatus', () => {
     expect(screen.getByLabelText('Passed')).toBeInTheDocument();
   });
 
+  it('lists consent checks separately, with the reason a check could not be made', async () => {
+    mockGetInstallation.mockResolvedValue({
+      ...NOT_DETECTED,
+      state: 'problem',
+      last_check_at: '2026-10-18T10:00:00Z',
+      last_check: {
+        url: 'https://example.com/',
+        checked_at: '2026-10-18T10:00:00Z',
+        ok: false,
+        checks: [
+          item({}),
+          item({
+            key: 'after_reject.trackers',
+            group: 'consent',
+            label: 'No trackers load after Reject',
+            status: 'failed',
+            fix: 'These trackers loaded after the visitor rejected: facebook.net.',
+          }),
+          item({
+            key: 'after_reject.saved',
+            group: 'consent',
+            label: 'Rejecting is remembered',
+            status: 'inconclusive',
+            detail: "We couldn't find the banner's Reject button.",
+          }),
+        ],
+      },
+    });
+    renderStatus();
+
+    const heading = await screen.findByRole('heading', { name: 'Consent checks' });
+    const section = heading.parentElement as HTMLElement;
+    expect(section).toHaveTextContent('No trackers load after Reject');
+    expect(section).not.toHaveTextContent('The page loads');
+    expect(screen.getByLabelText("Couldn't check")).toBeInTheDocument();
+    expect(screen.getByText("We couldn't find the banner's Reject button.")).toBeInTheDocument();
+  });
+
+  it('shows no consent section for checks stored before it existed', async () => {
+    mockGetInstallation.mockResolvedValue({
+      ...NOT_DETECTED,
+      state: 'installed',
+      last_check_at: '2026-10-18T10:00:00Z',
+      last_check: {
+        url: 'https://example.com/',
+        checked_at: '2026-10-18T10:00:00Z',
+        ok: true,
+        checks: [item({})],
+      },
+    });
+    renderStatus();
+
+    expect(await screen.findByText('The page loads')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Consent checks' })).not.toBeInTheDocument();
+  });
+
   it('shows why a check could not run', async () => {
     mockGetInstallation.mockResolvedValue(NOT_DETECTED);
     mockCheckInstallation.mockRejectedValue({
