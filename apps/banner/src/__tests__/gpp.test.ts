@@ -163,7 +163,18 @@ describe('GPP header', () => {
 
     expect(decoded.version).toBe(1);
     expect(decoded.sectionIds).toEqual([7, 8, 10]);
-    expect(decoded.applicableSections).toEqual([7, 8]);
+    // Applicable sections aren't encoded, so decoding takes every section.
+    expect(decoded.applicableSections).toEqual([7, 8, 10]);
+  });
+
+  // Test vectors from the IAB reference library (iabgpp-es HeaderV1 tests).
+  it.each([
+    [[], 'DBAA'],
+    [[2], 'DBABMA'],
+    [[2, 6], 'DBACNYA'],
+  ])('encodes section IDs %j as the specification does', (sectionIds, expected) => {
+    expect(encodeGppHeader({ version: 1, sectionIds, applicableSections: [] })).toBe(expected);
+    expect(decodeGppHeader(expected).sectionIds).toEqual(sectionIds);
   });
 
   it('encodes consecutive section IDs as ranges', () => {
@@ -189,7 +200,6 @@ describe('GPP header', () => {
     const decoded = decodeGppHeader(encoded);
 
     expect(decoded.sectionIds).toEqual([7, 8, 9, 11, 14]);
-    expect(decoded.applicableSections).toEqual([7]);
   });
 
   it('throws on invalid header type', () => {
@@ -630,7 +640,7 @@ describe('full GPP string encoding/decoding', () => {
 
     const decoded = decodeGppString(encoded);
     expect(decoded.header.sectionIds).toEqual([7, 8, 10]);
-    expect(decoded.header.applicableSections).toEqual([8]);
+    expect(decoded.header.applicableSections).toEqual([7, 8, 10]);
     expect(decoded.sections.get(7)!.data.SaleOptOut).toBe(1);
     expect(decoded.sections.get(7)!.gpcSubsection?.gpc).toBe(true);
     expect(decoded.sections.get(8)!.data.SaleOptOut).toBe(1);
