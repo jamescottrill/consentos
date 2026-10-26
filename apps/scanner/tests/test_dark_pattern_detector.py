@@ -1,153 +1,145 @@
-"""Tests for dark pattern detection — mocks Playwright."""
-
-from unittest.mock import AsyncMock
+"""Tests for judging the banner's dark-pattern checks from how it looked."""
 
 import pytest
 
-from src.dark_pattern_detector import (
-    check_button_prominence,
-    check_cookie_wall,
-    check_pre_ticked_boxes,
-    detect_dark_patterns,
-)
+from src.consent_results import BannerObservation, ButtonLook, PhaseObservation
+from src.dark_pattern_detector import LABELS, dark_pattern_checks
+
+BUTTON = ButtonLook(area=4000, font_size=14)
 
 
-class TestCheckButtonProminence:
-    @pytest.mark.asyncio
-    async def test_no_accept_button_returns_empty(self) -> None:
-        page = AsyncMock()
-        page.query_selector_all = AsyncMock(return_value=[])
-        issues = await check_button_prominence(page)
-        assert issues == []
-
-    @pytest.mark.asyncio
-    async def test_missing_reject_button_flagged(self) -> None:
-        # Accept button visible, reject not found
-        accept_el = AsyncMock()
-        accept_el.is_visible = AsyncMock(return_value=True)
-        accept_el.evaluate = AsyncMock(
-            return_value={
-                "width": 200,
-                "height": 40,
-                "area": 8000,
-                "backgroundColor": "rgb(37, 99, 235)",
-                "color": "rgb(255, 255, 255)",
-                "fontSize": 16,
-                "fontWeight": "600",
-                "padding": "8px 16px",
-                "text": "Accept All",
-                "visible": True,
-            }
-        )
-
-        call_count = 0
-
-        async def _mock_query(selector):
-            nonlocal call_count
-            call_count += 1
-            # First batch of calls = accept selectors, return button
-            # Remaining calls = reject selectors, return empty
-            if "Accept" in selector or "Allow" in selector or "accept" in selector:
-                return [accept_el]
-            return []
-
-        page = AsyncMock()
-        page.query_selector_all = _mock_query
-
-        issues = await check_button_prominence(page)
-        assert any(i.pattern == "missing_reject_button" for i in issues)
-
-    @pytest.mark.asyncio
-    async def test_unequal_button_size_flagged(self) -> None:
-        accept_el = AsyncMock()
-        accept_el.is_visible = AsyncMock(return_value=True)
-        accept_el.evaluate = AsyncMock(
-            return_value={
-                "width": 300,
-                "height": 50,
-                "area": 15000,
-                "fontSize": 18,
-                "fontWeight": "700",
-                "text": "Accept All",
-                "visible": True,
-            }
-        )
-
-        reject_el = AsyncMock()
-        reject_el.is_visible = AsyncMock(return_value=True)
-        reject_el.evaluate = AsyncMock(
-            return_value={
-                "width": 100,
-                "height": 30,
-                "area": 3000,
-                "fontSize": 12,
-                "fontWeight": "400",
-                "text": "Reject",
-                "visible": True,
-            }
-        )
-
-        async def _mock_query(selector):
-            if "Accept" in selector or "Allow" in selector or "accept" in selector:
-                return [accept_el]
-            if "Reject" in selector or "Decline" in selector or "reject" in selector:
-                return [reject_el]
-            return []
-
-        page = AsyncMock()
-        page.query_selector_all = _mock_query
-
-        issues = await check_button_prominence(page)
-        assert any(i.pattern == "unequal_button_size" for i in issues)
+def before(**kwargs) -> PhaseObservation:
+    fields = {"loaded": True, "banner_found": True, "observed": True, **kwargs}
+    return PhaseObservation("before_consent", **fields)
 
 
-class TestCheckPreTickedBoxes:
-    @pytest.mark.asyncio
-    async def test_no_pre_ticked_returns_empty(self) -> None:
-        page = AsyncMock()
-        page.evaluate = AsyncMock(return_value=[])
-        issues = await check_pre_ticked_boxes(page)
-        assert issues == []
-
-    @pytest.mark.asyncio
-    async def test_pre_ticked_non_essential_flagged(self) -> None:
-        page = AsyncMock()
-        page.evaluate = AsyncMock(
-            return_value=[
-                {"name": "analytics", "label": "Analytics Cookies"},
-                {"name": "marketing", "label": "Marketing Cookies"},
-            ]
-        )
-        issues = await check_pre_ticked_boxes(page)
-        assert len(issues) == 1
-        assert issues[0].pattern == "pre_ticked_checkboxes"
-        assert issues[0].severity == "critical"
+def reject(**kwargs) -> PhaseObservation:
+    return PhaseObservation(
+        "after_reject", loaded=True, banner_found=True, clicked=True, observed=True, **kwargs
+    )
 
 
-class TestCheckCookieWall:
-    @pytest.mark.asyncio
-    async def test_no_wall_returns_empty(self) -> None:
-        page = AsyncMock()
-        page.evaluate = AsyncMock(return_value=False)
-        issues = await check_cookie_wall(page)
-        assert issues == []
-
-    @pytest.mark.asyncio
-    async def test_wall_detected(self) -> None:
-        page = AsyncMock()
-        page.evaluate = AsyncMock(return_value=True)
-        issues = await check_cookie_wall(page)
-        assert len(issues) == 1
-        assert issues[0].pattern == "cookie_wall"
-        assert issues[0].severity == "critical"
+def looked(**kwargs) -> BannerObservation:
+    fields = {
+        "measured": True,
+        "showing": True,
+        "accept": BUTTON,
+        "reject": BUTTON,
+        "dismissed_by_scroll": False,
+        "walled_after_reject": False,
+    }
+    fields.update(kwargs)
+    return BannerObservation(**fields)
 
 
-class TestDetectDarkPatterns:
-    @pytest.mark.asyncio
-    async def test_no_banner_returns_empty(self) -> None:
-        page = AsyncMock()
-        page.url = "https://example.com/"
-        page.query_selector_all = AsyncMock(return_value=[])
-        result = await detect_dark_patterns(page)
-        assert result.banner_found is False
-        assert result.issues == []
+def results(banner=None, b=None, r=None) -> dict:
+    checks = dark_pattern_checks(b or before(), r or reject(), banner or looked())
+    return {c.key: c for c in checks}
+
+
+def test_a_fair_banner_passes_every_check():
+    found = results()
+    assert list(found) == list(LABELS)
+    assert {c.status for c in found.values()} == {"passed"}
+    assert {c.phase for c in found.values()} == {"banner"}
+
+
+class TestRejectButton:
+    def test_missing_reject_fails(self):
+        check = results(looked(reject=None))["banner.reject_button"]
+        assert check.status == "failed"
+        assert check.severity == "error"
+        assert "Reject" in check.fix
+
+    def test_missing_accept_is_inconclusive(self):
+        found = results(looked(accept=None))
+        assert found["banner.reject_button"].status == "inconclusive"
+        assert found["banner.equal_buttons"].status == "inconclusive"
+
+
+class TestEqualButtons:
+    def test_bigger_accept_is_a_warning(self):
+        check = results(looked(accept=ButtonLook(area=8000, font_size=14)))["banner.equal_buttons"]
+        assert check.status == "failed"
+        assert check.severity == "warning"
+        assert "2.0 times the size" in check.detail
+        assert check.evidence["area_ratio"] == 2.0
+
+    def test_bigger_accept_text_is_a_warning(self):
+        check = results(looked(accept=ButtonLook(area=4000, font_size=20)))["banner.equal_buttons"]
+        assert check.status == "failed"
+        assert "20px against Reject's 14px" in check.detail
+
+    @pytest.mark.parametrize("accept", [ButtonLook(5900, 18), ButtonLook(3000, 12)])
+    def test_small_differences_pass(self, accept):
+        assert results(looked(accept=accept))["banner.equal_buttons"].status == "passed"
+
+    def test_missing_reject_is_inconclusive_not_a_second_failure(self):
+        check = results(looked(reject=None))["banner.equal_buttons"]
+        assert check.status == "inconclusive"
+        assert check.severity == "warning"
+
+
+class TestPreTicked:
+    def test_ticked_optional_category_fails(self):
+        check = results(looked(pre_ticked=["analytics", "marketing"]))["banner.pre_ticked"]
+        assert check.status == "failed"
+        assert check.detail == "analytics, marketing"
+        assert check.evidence == {"categories": ["analytics", "marketing"]}
+
+    @pytest.mark.parametrize("mode", ["opt_out", "informational"])
+    def test_does_not_apply_where_tracking_is_on_until_opt_out(self, mode):
+        banner = looked(pre_ticked=["analytics"], blocking_mode=mode)
+        assert results(banner)["banner.pre_ticked"].status == "not_applicable"
+
+    def test_applies_in_opt_in(self):
+        banner = looked(pre_ticked=["analytics"], blocking_mode="opt_in")
+        assert results(banner)["banner.pre_ticked"].status == "failed"
+
+
+class TestScroll:
+    def test_dismissed_by_scrolling_fails(self):
+        assert results(looked(dismissed_by_scroll=True))["banner.scroll"].status == "failed"
+
+    def test_scroll_that_could_not_be_tried_is_inconclusive(self):
+        check = results(looked(dismissed_by_scroll=None))["banner.scroll"]
+        assert check.status == "inconclusive"
+
+
+class TestCookieWall:
+    def test_page_covered_after_reject_fails(self):
+        check = results(looked(walled_after_reject=True))["banner.cookie_wall"]
+        assert check.status == "failed"
+        assert "cookie wall" in check.fix
+
+    def test_without_reject_it_is_inconclusive(self):
+        r = PhaseObservation("after_reject", loaded=True, banner_found=True)
+        check = results(looked(walled_after_reject=None), r=r)["banner.cookie_wall"]
+        assert check.status == "inconclusive"
+        assert "Reject button" in check.detail
+
+    def test_unchecked_page_is_inconclusive(self):
+        check = results(looked(walled_after_reject=None))["banner.cookie_wall"]
+        assert check.status == "inconclusive"
+
+
+class TestNothingMeasuredNeverPasses:
+    @pytest.mark.parametrize(
+        ("b", "banner", "detail"),
+        [
+            (PhaseObservation("before_consent", error="timeout"), BannerObservation(), "timeout"),
+            (before(banner_found=False), BannerObservation(), "The banner didn't appear."),
+            (before(), BannerObservation(), "The check stopped before this step."),
+            (before(), BannerObservation(measured=True), "The banner didn't appear."),
+        ],
+    )
+    def test_every_check_is_inconclusive(self, b, banner, detail):
+        found = results(banner, b=b, r=PhaseObservation("after_reject"))
+        assert {c.status for c in found.values()} == {"inconclusive"}
+        assert found["banner.scroll"].detail == detail
+        assert found["banner.equal_buttons"].severity == "warning"
+
+    def test_cookie_wall_is_still_judged_from_the_reject_visit(self):
+        banner = BannerObservation(walled_after_reject=True)
+        found = results(banner, b=before(banner_found=False))
+        assert found["banner.cookie_wall"].status == "failed"

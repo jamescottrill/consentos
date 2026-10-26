@@ -1,348 +1,327 @@
-"""Dark pattern detection — CSS and DOM analysis of consent banners.
+"""Check the banner for dark patterns that nudge visitors into accepting.
 
-Detects manipulative UI patterns in cookie consent banners:
-- Unequal button prominence (Accept bigger/brighter than Reject)
-- Pre-ticked category checkboxes
-- Missing first-layer Reject button (CNIL violation)
-- Cookie walls (blocking page content)
-- Dismiss-on-scroll (not valid consent under GDPR)
+The banner is measured before the visitor chooses, and the page again
+after Reject:
+
+- a first layer with Accept but no Reject;
+- Accept made bigger, or in bigger text, than Reject;
+- optional categories ticked before the visitor chooses;
+- a banner that scrolling dismisses, since scrolling isn't consent;
+- a page still covered after Reject, a cookie wall.
+
+Unequal buttons are warnings, since how much bigger is too big is a
+judgement. The rest fail.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from playwright.async_api import Page
+from src.consent_results import (
+    BannerObservation,
+    ButtonLook,
+    CheckResult,
+    PhaseObservation,
+    names,
+    not_observed,
+)
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 logger = logging.getLogger(__name__)
 
+_HOST = "#consentos-banner-host"
+# Playwright's CSS selectors reach into the banner's open shadow root.
+BANNER_SELECTOR = f"{_HOST} .consentos-banner"
+_ACCEPT = f'{_HOST} [data-action="accept"]'
+_REJECT = f'{_HOST} [data-action="reject"]'
+_CATEGORIES = f"{_HOST} input[data-category]"
 
-@dataclass
-class DarkPatternIssue:
-    """A detected dark pattern in the consent banner."""
+# Accept more than this many times Reject's area, or text size, is flagged.
+MAX_AREA_RATIO = 1.5
+MAX_FONT_RATIO = 1.3
+SCROLL_PX = 500
 
-    pattern: str
-    severity: str  # critical, warning, info
-    message: str
-    recommendation: str
-    details: dict = field(default_factory=dict)
+# In these modes tracking is on until the visitor opts out, so the
+# banner ticks the categories on purpose.
+_PRE_TICKED_MODES = frozenset({"opt_out", "informational"})
 
+LABELS = {
+    "banner.reject_button": "The banner offers Reject alongside Accept",
+    "banner.equal_buttons": "Accept and Reject are equally prominent",
+    "banner.pre_ticked": "Optional categories start unticked",
+    "banner.scroll": "Scrolling doesn't dismiss the banner",
+    "banner.cookie_wall": "The page can be used after Reject",
+}
 
-@dataclass
-class DarkPatternResult:
-    """Result of dark pattern analysis."""
+_BUTTON_SCRIPT = """
+(el) => {
+  const rect = el.getBoundingClientRect();
+  return { area: rect.width * rect.height, fontSize: parseFloat(getComputedStyle(el).fontSize) };
+}
+"""
 
-    url: str
-    issues: list[DarkPatternIssue] = field(default_factory=list)
-    banner_found: bool = False
-    error: str | None = None
-
-
-# Common selectors for consent banner elements
-BANNER_SELECTORS = [
-    "[id*='cookie']",
-    "[id*='consent']",
-    "[class*='cookie']",
-    "[class*='consent']",
-    "[id*='cmp']",
-    "[class*='cmp']",
-    "[role='dialog'][aria-label*='cookie' i]",
-    "[role='dialog'][aria-label*='consent' i]",
-]
-
-ACCEPT_BUTTON_SELECTORS = [
-    "button:has-text('Accept')",
-    "button:has-text('Accept All')",
-    "button:has-text('Allow')",
-    "button:has-text('Allow All')",
-    "button:has-text('I Agree')",
-    "button:has-text('OK')",
-    "button:has-text('Got it')",
-    "[data-action='accept']",
-    "[id*='accept']",
-]
-
-REJECT_BUTTON_SELECTORS = [
-    "button:has-text('Reject')",
-    "button:has-text('Reject All')",
-    "button:has-text('Decline')",
-    "button:has-text('Deny')",
-    "button:has-text('Refuse')",
-    "button:has-text('Tout refuser')",
-    "[data-action='reject']",
-    "[id*='reject']",
-]
+# A cookie wall: the body locked in place, or a full-screen layer over
+# the middle of the page. The banner's own host is left out.
+_WALL_SCRIPT = """
+() => {
+  const body = getComputedStyle(document.body);
+  if (body.overflow === 'hidden' && body.position === 'fixed') return true;
+  const top = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+  for (let el = top; el && el !== document.body; el = el.parentElement) {
+    if (el.id === 'consentos-banner-host') return false;
+    const cs = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    if (cs.position === 'fixed'
+        && rect.width >= innerWidth * 0.9 && rect.height >= innerHeight * 0.9
+        && parseInt(cs.zIndex, 10) > 100
+        && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+"""
 
 
-async def _find_banner(page: Page) -> bool:
-    """Check if a consent banner is visible on the page."""
-    for selector in BANNER_SELECTORS:
-        try:
-            elements = await page.query_selector_all(selector)
-            for el in elements:
-                if await el.is_visible():
-                    return True
-        except Exception:
-            continue
-    return False
+# ── Measuring ────────────────────────────────────────────────────────
 
 
-async def _find_button(page: Page, selectors: list[str]) -> dict | None:
-    """Find a visible button matching one of the selectors, return its computed styles."""
-    for selector in selectors:
-        try:
-            elements = await page.query_selector_all(selector)
-            for el in elements:
-                if await el.is_visible():
-                    styles = await el.evaluate("""(el) => {
-                        const cs = window.getComputedStyle(el);
-                        const rect = el.getBoundingClientRect();
-                        return {
-                            width: rect.width,
-                            height: rect.height,
-                            area: rect.width * rect.height,
-                            backgroundColor: cs.backgroundColor,
-                            color: cs.color,
-                            fontSize: parseFloat(cs.fontSize),
-                            fontWeight: cs.fontWeight,
-                            padding: cs.padding,
-                            text: el.textContent.trim(),
-                            visible: true,
-                        };
-                    }""")
-                    return styles
-        except Exception:
-            continue
+async def _visible(page: Page, selector: str) -> bool:
+    try:
+        return await page.locator(selector).first.is_visible()
+    except Exception:
+        return False
+
+
+async def _button(page: Page, selector: str) -> ButtonLook | None:
+    if not await _visible(page, selector):
+        return None
+    try:
+        look = await page.locator(selector).first.evaluate(_BUTTON_SCRIPT)
+    except Exception:
+        logger.debug("Couldn't measure %s", selector, exc_info=True)
+        return None
+    return ButtonLook(area=look["area"], font_size=look["fontSize"])
+
+
+async def measure_banner(
+    page: Page, banner: BannerObservation, *, settle_ms: int, blocking_mode: str | None
+) -> None:
+    """Measure the banner as a first-time visitor sees it, before they choose.
+
+    Scrolls the page, so call it after everything else before the choice
+    has been observed.
+    """
+    banner.measured = True
+    banner.blocking_mode = blocking_mode
+    banner.showing = await _visible(page, BANNER_SELECTOR)
+    if not banner.showing:
+        return
+    banner.accept = await _button(page, _ACCEPT)
+    banner.reject = await _button(page, _REJECT)
+    try:
+        banner.pre_ticked = await page.locator(_CATEGORIES).evaluate_all(
+            "(els) => els.filter((e) => e.checked && !e.disabled).map((e) => e.dataset.category)"
+        )
+    except Exception:
+        logger.debug("Couldn't read the banner's categories", exc_info=True)
+    try:
+        await page.mouse.wheel(0, SCROLL_PX)
+        await page.wait_for_timeout(settle_ms)
+        banner.dismissed_by_scroll = not await _visible(page, BANNER_SELECTOR)
+    except Exception:
+        logger.debug("Couldn't scroll the page", exc_info=True)
+
+
+async def measure_wall(page: Page, banner: BannerObservation) -> None:
+    """Record whether anything still covers the page after Reject."""
+    try:
+        banner.walled_after_reject = bool(await page.evaluate(_WALL_SCRIPT))
+    except Exception:
+        logger.debug("Couldn't check the page for a cookie wall", exc_info=True)
+
+
+# ── Judging ──────────────────────────────────────────────────────────
+
+
+def _not_measured(before: PhaseObservation, banner: BannerObservation) -> str | None:
+    if not before.loaded:
+        return before.error or "The page didn't load."
+    if not before.banner_found:
+        return "The banner didn't appear."
+    if not banner.measured:
+        return before.error or "The check stopped before this step."
+    if not banner.showing:
+        return "The banner didn't appear."
     return None
 
 
-async def check_button_prominence(page: Page) -> list[DarkPatternIssue]:
-    """Compare Accept and Reject button sizes and visual weight."""
-    issues: list[DarkPatternIssue] = []
-
-    accept_btn = await _find_button(page, ACCEPT_BUTTON_SELECTORS)
-    reject_btn = await _find_button(page, REJECT_BUTTON_SELECTORS)
-
-    if not accept_btn:
-        return issues  # No accept button found — nothing to compare
-
-    if not reject_btn:
-        issues.append(
-            DarkPatternIssue(
-                pattern="missing_reject_button",
-                severity="critical",
-                message="No visible Reject/Decline button found on the first layer.",
-                recommendation=(
-                    "Add a clearly visible 'Reject All' button on the first layer "
-                    "of the consent banner, as required by GDPR and CNIL."
-                ),
-            )
+def _reject_check(banner: BannerObservation) -> CheckResult:
+    key = "banner.reject_button"
+    label = LABELS[key]
+    if banner.accept is None:
+        return CheckResult(
+            key,
+            "banner",
+            label,
+            "inconclusive",
+            detail="We couldn't find the banner's Accept button.",
         )
-        return issues
+    if banner.reject is not None:
+        return CheckResult(key, "banner", label, "passed")
+    return CheckResult(
+        key,
+        "banner",
+        label,
+        "failed",
+        fix=(
+            "The banner shows Accept but no Reject button, so refusing is harder than "
+            "accepting. Visitors must be able to refuse as easily as they accept. Check your "
+            "site's CSS isn't hiding the banner's Reject button."
+        ),
+    )
 
-    # Compare button areas
-    accept_area = accept_btn.get("area", 0)
-    reject_area = reject_btn.get("area", 0)
 
-    if reject_area > 0 and accept_area > 0:
-        ratio = accept_area / reject_area
-        if ratio > 1.5:
-            issues.append(
-                DarkPatternIssue(
-                    pattern="unequal_button_size",
-                    severity="warning",
-                    message=(
-                        f"Accept button is {ratio:.1f}x larger than Reject button. "
-                        "Buttons should have equal prominence."
-                    ),
-                    recommendation=(
-                        "Make the Accept and Reject buttons the same size and visual weight."
-                    ),
-                    details={
-                        "accept_area": accept_area,
-                        "reject_area": reject_area,
-                        "ratio": round(ratio, 2),
-                    },
-                )
-            )
-
-    # Compare font sizes
-    accept_font = accept_btn.get("fontSize", 0)
-    reject_font = reject_btn.get("fontSize", 0)
-
-    if reject_font > 0 and accept_font > reject_font * 1.3:
-        issues.append(
-            DarkPatternIssue(
-                pattern="unequal_font_size",
-                severity="warning",
-                message=(
-                    f"Accept button font ({accept_font}px) is larger than "
-                    f"Reject button font ({reject_font}px)."
-                ),
-                recommendation="Use the same font size for both Accept and Reject buttons.",
-                details={
-                    "accept_font_size": accept_font,
-                    "reject_font_size": reject_font,
-                },
-            )
+def _equal_buttons_check(banner: BannerObservation) -> CheckResult:
+    key = "banner.equal_buttons"
+    label = LABELS[key]
+    accept, reject = banner.accept, banner.reject
+    if accept is None or reject is None or reject.area <= 0 or reject.font_size <= 0:
+        return CheckResult(
+            key,
+            "banner",
+            label,
+            "inconclusive",
+            detail="We couldn't measure both the Accept and Reject buttons.",
+            severity="warning",
         )
+    area_ratio = accept.area / reject.area
+    font_ratio = accept.font_size / reject.font_size
+    problems = []
+    if area_ratio > MAX_AREA_RATIO:
+        problems.append(f"Accept is {area_ratio:.1f} times the size of Reject")
+    if font_ratio > MAX_FONT_RATIO:
+        problems.append(
+            f"Accept's text is {accept.font_size:g}px against Reject's {reject.font_size:g}px"
+        )
+    if not problems:
+        return CheckResult(key, "banner", label, "passed", severity="warning")
+    return CheckResult(
+        key,
+        "banner",
+        label,
+        "failed",
+        detail="; ".join(problems),
+        fix=(
+            f"{'; '.join(problems)}. Making Accept stand out nudges visitors towards it. Give "
+            "both buttons the same size and text size in the banner's appearance settings, "
+            "and check your site's CSS doesn't change them."
+        ),
+        evidence={"area_ratio": round(area_ratio, 2), "font_ratio": round(font_ratio, 2)},
+        severity="warning",
+    )
 
-    return issues
+
+def _pre_ticked_check(banner: BannerObservation) -> CheckResult:
+    key = "banner.pre_ticked"
+    label = LABELS[key]
+    if banner.blocking_mode in _PRE_TICKED_MODES:
+        return CheckResult(key, "banner", label, "not_applicable")
+    if not banner.pre_ticked:
+        return CheckResult(key, "banner", label, "passed")
+    return CheckResult(
+        key,
+        "banner",
+        label,
+        "failed",
+        detail=names(banner.pre_ticked),
+        fix=(
+            f"These categories are ticked before the visitor chooses: "
+            f"{names(banner.pre_ticked)}. A pre-ticked box isn't consent, so optional "
+            "categories must start unticked. Check for a script on your site ticking them."
+        ),
+        evidence={"categories": banner.pre_ticked},
+    )
 
 
-async def check_pre_ticked_boxes(page: Page) -> list[DarkPatternIssue]:
-    """Check for pre-ticked non-essential category checkboxes."""
-    issues: list[DarkPatternIssue] = []
+def _scroll_check(banner: BannerObservation) -> CheckResult:
+    key = "banner.scroll"
+    label = LABELS[key]
+    if banner.dismissed_by_scroll is None:
+        return CheckResult(
+            key, "banner", label, "inconclusive", detail="We couldn't scroll the page."
+        )
+    if not banner.dismissed_by_scroll:
+        return CheckResult(key, "banner", label, "passed")
+    return CheckResult(
+        key,
+        "banner",
+        label,
+        "failed",
+        fix=(
+            "The banner disappeared when the visitor scrolled. Scrolling isn't consent, so "
+            "the banner must stay until the visitor chooses. Check for a script on your site "
+            "hiding it."
+        ),
+    )
 
-    try:
-        pre_ticked = await page.evaluate("""() => {
-            const checkboxes = document.querySelectorAll(
-                'input[type="checkbox"][checked], input[type="checkbox"]:checked'
-            );
-            const results = [];
-            for (const cb of checkboxes) {
-                // Skip if it looks like an "essential" checkbox (often disabled)
-                if (cb.disabled) continue;
-                const label = cb.closest('label')?.textContent?.trim()
-                    || cb.getAttribute('aria-label')
-                    || cb.name
-                    || 'unknown';
-                // Skip checkboxes that appear to be for essential/necessary
-                const labelLower = label.toLowerCase();
-                if (labelLower.includes('essential') || labelLower.includes('necessary')
-                    || labelLower.includes('required') || labelLower.includes('strictly')) {
-                    continue;
-                }
-                results.push({ name: cb.name || cb.id, label: label });
-            }
-            return results;
-        }""")
 
-        if pre_ticked:
-            labels = [pt["label"][:50] for pt in pre_ticked]
-            issues.append(
-                DarkPatternIssue(
-                    pattern="pre_ticked_checkboxes",
-                    severity="critical",
-                    message=(
-                        f"{len(pre_ticked)} non-essential category checkbox(es) are pre-ticked: "
-                        f"{', '.join(labels[:3])}"
-                    ),
-                    recommendation=(
-                        "Non-essential category checkboxes must default to unchecked. "
-                        "Pre-ticked boxes do not constitute valid consent under GDPR."
-                    ),
-                    details={"checkboxes": pre_ticked},
-                )
+def _wall_check(reject: PhaseObservation, banner: BannerObservation) -> CheckResult:
+    key = "banner.cookie_wall"
+    label = LABELS[key]
+    reason = not_observed(reject, needs_click=True)
+    if reason:
+        return CheckResult(key, "banner", label, "inconclusive", detail=reason)
+    if banner.walled_after_reject is None:
+        return CheckResult(
+            key,
+            "banner",
+            label,
+            "inconclusive",
+            detail="We couldn't check the page after Reject.",
+        )
+    if not banner.walled_after_reject:
+        return CheckResult(key, "banner", label, "passed")
+    return CheckResult(
+        key,
+        "banner",
+        label,
+        "failed",
+        fix=(
+            "After the visitor rejected, something still covers the page, a cookie wall. "
+            "Visitors who refuse must still be able to use the site. Check for an overlay "
+            "or script on your site that stays until the visitor accepts."
+        ),
+    )
+
+
+def dark_pattern_checks(
+    before: PhaseObservation, reject: PhaseObservation, banner: BannerObservation
+) -> list[CheckResult]:
+    """The banner's dark-pattern checks, one per pattern."""
+    reason = _not_measured(before, banner)
+    if reason:
+        # The cookie wall is checked on the Reject visit, so can still be judged.
+        unmeasured = [
+            CheckResult(
+                key,
+                "banner",
+                LABELS[key],
+                "inconclusive",
+                detail=reason,
+                severity="warning" if key == "banner.equal_buttons" else "error",
             )
-    except Exception as exc:
-        logger.debug("Pre-ticked checkbox check failed: %s", exc)
-
-    return issues
-
-
-async def check_cookie_wall(page: Page) -> list[DarkPatternIssue]:
-    """Check if a cookie wall blocks access to page content."""
-    issues: list[DarkPatternIssue] = []
-
-    try:
-        is_wall = await page.evaluate("""() => {
-            // Check for full-screen overlays blocking content
-            const overlays = document.querySelectorAll(
-                '[class*="overlay"], [class*="modal"], [class*="wall"]'
-            );
-            for (const overlay of overlays) {
-                const cs = window.getComputedStyle(overlay);
-                const rect = overlay.getBoundingClientRect();
-                // Full-viewport overlay with high z-index suggests a cookie wall
-                if (rect.width >= window.innerWidth * 0.9
-                    && rect.height >= window.innerHeight * 0.9
-                    && parseInt(cs.zIndex) > 100) {
-                    return true;
-                }
-            }
-            // Check if body/main is hidden or has overflow hidden
-            const body = document.body;
-            const bodyStyle = window.getComputedStyle(body);
-            if (bodyStyle.overflow === 'hidden' && bodyStyle.position === 'fixed') {
-                return true;
-            }
-            return false;
-        }""")
-
-        if is_wall:
-            issues.append(
-                DarkPatternIssue(
-                    pattern="cookie_wall",
-                    severity="critical",
-                    message="Cookie wall detected — page content appears blocked until consent.",
-                    recommendation=(
-                        "Remove the cookie wall. Users must be able to access the site "
-                        "without being forced to consent to non-essential cookies."
-                    ),
-                )
-            )
-    except Exception as exc:
-        logger.debug("Cookie wall check failed: %s", exc)
-
-    return issues
-
-
-async def check_scroll_dismissal(page: Page) -> list[DarkPatternIssue]:
-    """Check if scrolling dismisses the consent banner (not valid consent)."""
-    issues: list[DarkPatternIssue] = []
-
-    try:
-        # Check if banner is visible before scroll
-        banner_visible_before = await _find_banner(page)
-        if not banner_visible_before:
-            return issues
-
-        # Scroll down
-        await page.evaluate("window.scrollBy(0, 500)")
-        await page.wait_for_timeout(1000)
-
-        # Check if banner disappeared
-        banner_visible_after = await _find_banner(page)
-
-        if banner_visible_before and not banner_visible_after:
-            issues.append(
-                DarkPatternIssue(
-                    pattern="scroll_dismissal",
-                    severity="critical",
-                    message="Consent banner dismissed on scroll — this is not valid consent.",
-                    recommendation=(
-                        "Disable dismiss-on-scroll. Under GDPR, scrolling does not "
-                        "constitute valid consent. The banner must remain until the user "
-                        "makes an explicit choice."
-                    ),
-                )
-            )
-    except Exception as exc:
-        logger.debug("Scroll dismissal check failed: %s", exc)
-
-    return issues
-
-
-async def detect_dark_patterns(page: Page) -> DarkPatternResult:
-    """Run all dark pattern checks on the current page."""
-    url = page.url
-    result = DarkPatternResult(url=url)
-
-    try:
-        result.banner_found = await _find_banner(page)
-        if not result.banner_found:
-            return result
-
-        # Run all checks
-        result.issues.extend(await check_button_prominence(page))
-        result.issues.extend(await check_pre_ticked_boxes(page))
-        result.issues.extend(await check_cookie_wall(page))
-        result.issues.extend(await check_scroll_dismissal(page))
-
-    except Exception as exc:
-        result.error = str(exc)
-        logger.warning("Dark pattern detection failed for %s: %s", url, exc)
-
-    return result
+            for key in LABELS
+            if key != "banner.cookie_wall"
+        ]
+        return [*unmeasured, _wall_check(reject, banner)]
+    return [
+        _reject_check(banner),
+        _equal_buttons_check(banner),
+        _pre_ticked_check(banner),
+        _scroll_check(banner),
+        _wall_check(reject, banner),
+    ]

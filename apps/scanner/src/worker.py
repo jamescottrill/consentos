@@ -114,7 +114,7 @@ class ValidationRequest(BaseModel):
 
 class ConsentCheckResponse(BaseModel):
     key: str
-    phase: Literal["before_consent", "after_accept", "after_reject", "with_gpc"]
+    phase: Literal["before_consent", "after_accept", "after_reject", "with_gpc", "banner"]
     label: str
     status: Literal["passed", "failed", "inconclusive", "not_applicable"]
     detail: str | None = None

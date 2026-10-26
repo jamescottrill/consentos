@@ -44,6 +44,10 @@ class Setup:
     gpp: str = "ok"  # ok, missing or stale
     gpc_recorded: bool = True
     reject_button: bool = True
+    big_accept: bool = False
+    pre_ticked: bool = False
+    dismiss_on_scroll: bool = False
+    wall_after_reject: bool = False
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,36 @@ CASES = [
             "after_reject.trackers": "inconclusive",
             "after_reject.gcm_denied": "inconclusive",
             "after_reject.gpp": "inconclusive",
+            "banner.reject_button": "failed",
+            "banner.equal_buttons": "inconclusive",
+            "banner.cookie_wall": "inconclusive",
         },
+    ),
+    Case(
+        "big-accept-button",
+        replace(CORRECT, big_accept=True),
+        {"banner.equal_buttons": "failed"},
+    ),
+    Case(
+        "pre-ticked-categories",
+        replace(CORRECT, pre_ticked=True),
+        {"banner.pre_ticked": "failed"},
+    ),
+    Case(
+        "dismissed-by-scrolling",
+        replace(CORRECT, dismiss_on_scroll=True),
+        # The banner is gone before Accept can be clicked.
+        {
+            "banner.scroll": "failed",
+            "after_accept.saved": "inconclusive",
+            "after_accept.gcm_update": "inconclusive",
+            "after_accept.gpp": "inconclusive",
+        },
+    ),
+    Case(
+        "cookie-wall",
+        replace(CORRECT, wall_after_reject=True),
+        {"banner.cookie_wall": "failed"},
     ),
 ]
 
@@ -172,6 +205,10 @@ def render(setup: Setup) -> str:
         "gpp": setup.gpp,
         "gpcRecorded": setup.gpc_recorded,
         "rejectButton": setup.reject_button,
+        "bigAccept": setup.big_accept,
+        "preTicked": setup.pre_ticked,
+        "dismissOnScroll": setup.dismiss_on_scroll,
+        "wallAfterReject": setup.wall_after_reject,
         "gppStrings": {
             "accept": usnat_string(2, gpc=False),
             "acceptGpc": usnat_string(2, gpc=True),
@@ -209,7 +246,7 @@ if (SETUP.gpp !== 'missing') {{
 }}
 </script>
 {tag_after}
-</head><body>
+</head><body style="min-height: 3000px">
 <div id="consentos-banner-host"></div>
 <script>
 const gpc = navigator.globalPrivacyControl === true;
@@ -230,12 +267,26 @@ const choose = (accepted) => {{
     gppString = SETUP.gppStrings[key];
   }}
   ping();
+  root.querySelector('.consentos-banner').remove();
+  if (!accepted && SETUP.wallAfterReject) {{
+    document.body.insertAdjacentHTML('beforeend',
+      '<div style="position: fixed; inset: 0; z-index: 1000; background: #000"></div>');
+  }}
 }};
 const root = document.getElementById('consentos-banner-host').attachShadow({{ mode: 'open' }});
-root.innerHTML = '<button data-action="accept">Accept all</button>'
-  + (SETUP.rejectButton ? '<button data-action="reject">Reject all</button>' : '');
+const accept = SETUP.bigAccept ? ' style="font-size: 24px; padding: 20px 40px"' : '';
+root.innerHTML = '<div class="consentos-banner" style="position: fixed; bottom: 0">'
+  + '<label>Analytics <input type="checkbox" data-category="analytics"'
+  + (SETUP.preTicked ? ' checked' : '') + '></label>'
+  + '<label>Necessary <input type="checkbox" data-category="necessary" checked disabled></label>'
+  + (SETUP.rejectButton ? '<button data-action="reject">Reject all</button>' : '')
+  + '<button data-action="accept"' + accept + '>Accept all</button></div>';
 root.querySelector('[data-action=accept]').onclick = () => choose(true);
 if (SETUP.rejectButton) root.querySelector('[data-action=reject]').onclick = () => choose(false);
+if (SETUP.dismissOnScroll) {{
+  const dismiss = () => root.querySelector('.consentos-banner')?.remove();
+  addEventListener('scroll', dismiss, {{ once: true }});
+}}
 </script>
 </body></html>
 """
