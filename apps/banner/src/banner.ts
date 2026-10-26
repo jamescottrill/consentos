@@ -187,10 +187,22 @@ async function init(): Promise<void> {
     }
   }
 
-  // Install GPP API if enabled
+  // Install GPP API if enabled. A returning visitor's choices are
+  // rebuilt from their saved consent so vendors can read them at once.
   if (config.gpp_enabled) {
-    installGppApi(0, config.gpp_supported_apis ?? []);
-    setGppDisplayStatus('visible');
+    const supportedApis = config.gpp_supported_apis ?? [];
+    installGppApi(0, supportedApis);
+    if (existingConsent && !reconsentRequired) {
+      updateGppConsent(
+        buildGppFromConsent(
+          existingConsent.accepted,
+          supportedApis,
+          existingConsent.gpcDetected ?? false,
+        ),
+      );
+    } else {
+      setGppDisplayStatus('visible');
+    }
   }
 
   // Install __tcfapi (locator iframe + postMessage proxy + global)
@@ -225,6 +237,7 @@ async function init(): Promise<void> {
   // ``window.ConsentOS.showPreferences()``.
   _openPreferences = () => {
     removePreferencesButton();
+    setGppDisplayStatus('visible');
     const current = readConsent();
     renderBanner(
       config,
@@ -626,7 +639,6 @@ function handleConsent(
   if (config.gpp_enabled && isGppApiInstalled()) {
     const gpp = buildGppFromConsent(accepted, config.gpp_supported_apis ?? [], gpcResult?.detected ?? false);
     gppString = updateGppConsent(gpp);
-    setGppDisplayStatus('hidden');
   }
 
   // Generate TCF v2.3 TC string + emit ``useractioncomplete`` event

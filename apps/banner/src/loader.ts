@@ -213,8 +213,10 @@ function installGppStub(): void {
           signalStatus: 'not ready',
           supportedAPIs: [],
           cmpId: 0,
+          sectionList: [],
+          applicableSections: [-1],
           gppString: '',
-          applicableSections: [],
+          parsedSections: {},
         },
         true,
       );

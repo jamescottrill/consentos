@@ -161,9 +161,9 @@ def expected_sections(expect: Expectations) -> list[str]:
     return listed or (["usnat"] if not expect.gpp_sections else [])
 
 
-def _prefix(api: str) -> str:
-    """``7:usnat`` or ``usnat`` as ``usnat``."""
-    return api.split(":", 1)[-1]
+def _gpp_string(obs: PhaseObservation) -> str:
+    """The GPP string ``ping`` reported, as GPP 1.1 has it."""
+    return ((obs.gpp or {}).get("ping") or {}).get("gppString") or ""
 
 
 def _off(expect: Expectations, obs: PhaseObservation, key: str, label: str) -> CheckResult | None:
@@ -203,7 +203,8 @@ def _api_check(expect: Expectations, obs: PhaseObservation) -> CheckResult:
             detail=f"cmpStatus is {ping.get('cmpStatus')!r}",
             fix="The GPP API reports it hasn't finished loading. Check the browser's console.",
         )
-    supported = {_prefix(api) for api in ping.get("supportedAPIs") or []}
+    listed = ping.get("supportedAPIs") or []
+    supported = {api.split(":", 1)[-1] for api in listed}
     missing = [s for s in expected_sections(expect) if s not in supported]
     if missing:
         return CheckResult(
@@ -218,6 +219,22 @@ def _api_check(expect: Expectations, obs: PhaseObservation) -> CheckResult:
             ),
             evidence={"missing": missing},
         )
+    # GPP 1.1 lists each section as "<id>:<prefix>", e.g. "7:usnat".
+    wanted = {s: f"{SECTION_IDS[s]}:{s}" for s in expected_sections(expect)}
+    wrong = [api for api in listed if wanted.get(api.split(":", 1)[-1], api) != api]
+    if wrong:
+        return CheckResult(
+            key,
+            obs.phase,
+            label,
+            "failed",
+            detail=names(wrong),
+            fix=(
+                "The GPP API lists sections without their GPP 1.1 section IDs, so vendors "
+                f"written for 1.1 won't find them. Expected {names(list(wanted.values()))}."
+            ),
+            evidence={"wrong": wrong},
+        )
     return CheckResult(key, obs.phase, label, "passed")
 
 
@@ -231,8 +248,7 @@ def _string_check(expect: Expectations, obs: PhaseObservation) -> CheckResult:
         return off
     if reason := not_observed(obs, needs_click=True):
         return CheckResult(key, obs.phase, label, "inconclusive", detail=reason)
-    data = (obs.gpp or {}).get("data") or {}
-    gpp_string = data.get("gppString") or ""
+    gpp_string = _gpp_string(obs)
     when = "After Accept" if accept else "After Reject"
     if not gpp_string:
         return CheckResult(
@@ -305,7 +321,7 @@ def _gpc_check(expect: Expectations, obs: PhaseObservation) -> CheckResult:
     elif expect.gpc_global_honour and state.get("gpcHonoured") is not True:
         problems.append("the saved choice doesn't show GPC as honoured")
 
-    gpp_string = ((obs.gpp or {}).get("data") or {}).get("gppString") or ""
+    gpp_string = _gpp_string(obs)
     if expect.gpp_enabled and gpp_string:
         try:
             sections = decode_gpp(gpp_string)

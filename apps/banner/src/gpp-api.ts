@@ -1,24 +1,17 @@
 /**
- * IAB GPP CMP API — `__gpp()` global interface.
+ * IAB GPP CMP API 1.1: the `__gpp()` global.
  *
- * Implements the client-side JavaScript API that ad tech vendors call to
- * retrieve the user's consent state under the Global Privacy Platform.
- * Analogous to `__tcfapi()` for TCF v2.3.
+ * Vendors call this to read the visitor's choices under the Global Privacy
+ * Platform. Analogous to `__tcfapi()` for TCF v2.3.
  *
- * Supported commands: ping, getGPPData, getSection, hasSection,
- * addEventListener, removeEventListener.
+ * Commands: ping, addEventListener, removeEventListener, hasSection,
+ * getSection and getField. `ping` carries the whole consent state.
  *
  * @see https://github.com/InteractiveAdvertisingBureau/Global-Privacy-Platform/blob/main/Core/CMP%20API%20Specification.md
  */
 
-import {
-  type GppHeader,
-  type GppString,
-  type SectionData,
-  type SectionDef,
-  SECTION_REGISTRY,
-  encodeGppString,
-} from './gpp';
+import { type GppString, type SectionDef, encodeGppString, SECTION_REGISTRY } from './gpp';
+import { resolveSections } from './gpp-consent';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -42,35 +35,33 @@ export type GppApiCallback = (data: unknown, success: boolean) => void;
 /** A queued __gpp() call (from the stub). */
 export type GppQueueEntry = [string, GppApiCallback, unknown?];
 
+/** One sub-section of a parsed section: its fields by name. */
+export type Subsection = Record<string, number | number[] | boolean>;
+
 /** Return type for the 'ping' command. */
 export interface GppPingReturn {
   gppVersion: string;
-  cmpStatus: 'loaded' | 'stub';
+  cmpStatus: 'stub' | 'loading' | 'loaded' | 'error';
   cmpDisplayStatus: 'visible' | 'hidden' | 'disabled';
   signalStatus: 'ready' | 'not ready';
+  /** `"<section id>:<API prefix>"`, e.g. `"7:usnat"`. */
   supportedAPIs: string[];
   cmpId: number;
-  /** The current GPP string, or empty if not yet resolved. */
-  gppString: string;
-  /** Section IDs that apply to the current transaction. */
+  /** Section IDs in the GPP string. */
+  sectionList: number[];
+  /** Section IDs that apply to this visitor, or `[-1]` when none do. */
   applicableSections: number[];
+  /** The current GPP string, empty until the visitor has chosen. */
+  gppString: string;
+  /** Each section in the GPP string, keyed by API prefix. */
+  parsedSections: Record<string, Subsection[]>;
 }
 
-/** Return type for the 'getGPPData' command. */
-export interface GppData {
-  /** The encoded GPP string. */
-  gppString: string;
-  /** Section IDs applicable to the current transaction. */
-  applicableSections: number[];
-  /** Parsed section data keyed by section ID. */
-  parsedSections: Record<number, SectionData>;
-}
-
-/** Event data sent to registered listeners. */
+/** Event object sent to listeners. */
 export interface GppEventData {
   eventName: string;
   listenerId: number;
-  data: GppData | GppPingReturn | boolean;
+  data: unknown;
   pingData: GppPingReturn;
 }
 
@@ -78,10 +69,9 @@ export interface GppEventData {
 
 interface GppApiState {
   cmpId: number;
+  sections: SectionDef[];
+  gpp: GppString | null;
   gppString: string;
-  header: GppHeader | null;
-  sections: Map<number, SectionData>;
-  supportedAPIs: string[];
   signalStatus: 'ready' | 'not ready';
   displayStatus: 'visible' | 'hidden' | 'disabled';
   listeners: Map<number, GppApiCallback>;
@@ -90,41 +80,54 @@ interface GppApiState {
 
 let apiState: GppApiState | null = null;
 
-// ── Ping builder ─────────────────────────────────────────────────────
+// ── Builders ─────────────────────────────────────────────────────────
+
+function parsedSections(gpp: GppString | null): Record<string, Subsection[]> {
+  const parsed: Record<string, Subsection[]> = {};
+  for (const [id, section] of gpp?.sections ?? []) {
+    const def = SECTION_REGISTRY.get(id);
+    if (!def) continue;
+    const subsections: Subsection[] = [{ ...section.data }];
+    if (section.gpcSubsection) {
+      subsections.push({ SubsectionType: 1, Gpc: section.gpcSubsection.gpc });
+    }
+    parsed[def.apiPrefix] = subsections;
+  }
+  return parsed;
+}
 
 function buildPingReturn(state: GppApiState): GppPingReturn {
+  const applicable = state.gpp
+    ? state.gpp.header.applicableSections
+    : state.sections.map((def) => def.id);
   return {
     gppVersion: '1.1',
     cmpStatus: 'loaded',
     cmpDisplayStatus: state.displayStatus,
     signalStatus: state.signalStatus,
-    supportedAPIs: state.supportedAPIs,
+    supportedAPIs: state.sections.map((def) => `${def.id}:${def.apiPrefix}`),
     cmpId: state.cmpId,
+    sectionList: state.gpp ? [...state.gpp.header.sectionIds] : [],
+    applicableSections: applicable.length > 0 ? [...applicable] : [-1],
     gppString: state.gppString,
-    applicableSections: state.header?.applicableSections ?? [],
+    parsedSections: parsedSections(state.gpp),
   };
 }
 
-function buildGppData(state: GppApiState): GppData {
-  const parsedSections: Record<number, SectionData> = {};
-  state.sections.forEach((data, id) => {
-    parsedSections[id] = data;
+function notify(state: GppApiState, eventName: string, data: unknown): void {
+  const pingData = buildPingReturn(state);
+  state.listeners.forEach((callback, listenerId) => {
+    try {
+      callback({ eventName, listenerId, data, pingData } satisfies GppEventData, true);
+    } catch {
+      // A failing listener mustn't stop the others hearing.
+    }
   });
-
-  return {
-    gppString: state.gppString,
-    applicableSections: state.header?.applicableSections ?? [],
-    parsedSections,
-  };
 }
 
 // ── Command handler ──────────────────────────────────────────────────
 
-function gppApiHandler(
-  command: string,
-  callback: GppApiCallback,
-  parameter?: unknown,
-): void {
+function gppApiHandler(command: string, callback: GppApiCallback, parameter?: unknown): void {
   if (!apiState) {
     callback(false, false);
     return;
@@ -136,76 +139,59 @@ function gppApiHandler(
       break;
     }
 
-    case 'getGPPData': {
-      callback(buildGppData(apiState), true);
+    case 'hasSection': {
+      const prefix = typeof parameter === 'string' ? parameter : '';
+      callback(prefix in parsedSections(apiState.gpp), true);
       break;
     }
 
     case 'getSection': {
-      const prefix = parameter as string;
-      if (!prefix) {
-        callback(null, false);
-        return;
-      }
-      // Find section by API prefix
-      let found = false;
-      for (const [id, def] of SECTION_REGISTRY.entries()) {
-        if (def.apiPrefix === prefix && apiState.sections.has(id)) {
-          callback(apiState.sections.get(id)!, true);
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        callback(null, false);
-      }
+      const prefix = typeof parameter === 'string' ? parameter : '';
+      const section = parsedSections(apiState.gpp)[prefix];
+      callback(section ?? null, section !== undefined);
       break;
     }
 
-    case 'hasSection': {
-      const prefix = parameter as string;
-      if (!prefix) {
-        callback(false, true);
-        return;
-      }
-      let has = false;
-      for (const [id, def] of SECTION_REGISTRY.entries()) {
-        if (def.apiPrefix === prefix && apiState.sections.has(id)) {
-          has = true;
-          break;
-        }
-      }
-      callback(has, true);
+    case 'getField': {
+      // "<API prefix>.<field name>", e.g. "usnat.SaleOptOut".
+      const [prefix, name] = typeof parameter === 'string' ? parameter.split('.', 2) : [];
+      const subsection = parsedSections(apiState.gpp)[prefix]?.find((s) => name in s);
+      callback(subsection ? subsection[name] : null, subsection !== undefined);
       break;
     }
 
     case 'addEventListener': {
       const listenerId = apiState.nextListenerId++;
       apiState.listeners.set(listenerId, callback);
-      // Immediately notify with current state
-      const eventData: GppEventData = {
+      const event: GppEventData = {
         eventName: 'listenerRegistered',
         listenerId,
-        data: buildGppData(apiState),
+        data: true,
         pingData: buildPingReturn(apiState),
       };
       try {
-        callback(eventData, true);
+        callback(event, true);
       } catch {
-        // Swallow listener errors during initial notification
+        // Ignore a listener that fails on registration.
       }
       break;
     }
 
     case 'removeEventListener': {
-      const id = parameter as number;
-      const removed = apiState.listeners.delete(id);
-      callback(removed, removed);
+      const listenerId = parameter as number;
+      const removed = apiState.listeners.delete(listenerId);
+      const event: GppEventData = {
+        eventName: 'listenerRemoved',
+        listenerId,
+        data: removed,
+        pingData: buildPingReturn(apiState),
+      };
+      callback(event, removed);
       break;
     }
 
     default:
-      callback(false, false);
+      callback(null, false);
   }
 }
 
@@ -230,18 +216,14 @@ function processQueuedCalls(): void {
  * Install the __gpp() global function and process any queued calls.
  *
  * @param cmpId Registered CMP ID.
- * @param supportedAPIs List of supported API prefixes (e.g. ['usnat', 'usca']).
+ * @param supportedApis The site's section prefixes, e.g. `['usnat', 'usca']`.
  */
-export function installGppApi(
-  cmpId: number,
-  supportedAPIs: string[] = [],
-): void {
+export function installGppApi(cmpId: number, supportedApis: string[] = []): void {
   apiState = {
     cmpId,
+    sections: resolveSections(supportedApis),
+    gpp: null,
     gppString: '',
-    header: null,
-    sections: new Map(),
-    supportedAPIs,
     signalStatus: 'not ready',
     displayStatus: 'hidden',
     listeners: new Map(),
@@ -265,58 +247,40 @@ export function removeGppApi(): void {
 }
 
 /**
- * Update the GPP consent state and notify all listeners.
+ * Record the visitor's choices, hide the banner and tell listeners.
  *
- * @param gpp The full GPP string data to set.
+ * Listeners hear, in order: `signalStatus` "not ready" if a string was
+ * already set, `cmpDisplayStatus` if the banner was showing, one
+ * `sectionChange` per section, then `signalStatus` "ready".
+ *
  * @returns The encoded GPP string.
  */
 export function updateGppConsent(gpp: GppString): string {
   const gppString = encodeGppString(gpp);
+  const state = apiState;
+  if (!state) return gppString;
 
-  if (apiState) {
-    apiState.gppString = gppString;
-    apiState.header = gpp.header;
-    apiState.sections = new Map<number, SectionData>();
-
-    // Copy section data (just the data, not the gpcSubsection)
-    for (const [id, section] of gpp.sections.entries()) {
-      apiState.sections.set(id, section.data);
-    }
-
-    apiState.signalStatus = 'ready';
-    apiState.displayStatus = 'hidden';
-
-    // Notify all listeners
-    const ping = buildPingReturn(apiState);
-    apiState.listeners.forEach((callback, listenerId) => {
-      const eventData: GppEventData = {
-        eventName: 'signalStatus',
-        listenerId,
-        data: buildGppData(apiState!),
-        pingData: ping,
-      };
-      try {
-        callback(eventData, true);
-      } catch {
-        // Swallow listener errors
-      }
-    });
+  if (state.signalStatus === 'ready') {
+    state.signalStatus = 'not ready';
+    notify(state, 'signalStatus', 'not ready');
   }
+  state.gpp = gpp;
+  state.gppString = gppString;
+  setGppDisplayStatus('hidden');
+  for (const prefix of Object.keys(parsedSections(gpp))) {
+    notify(state, 'sectionChange', prefix);
+  }
+  state.signalStatus = 'ready';
+  notify(state, 'signalStatus', 'ready');
 
   return gppString;
 }
 
-/** Set the display status (visible when banner is shown). */
+/** Set the display status, telling listeners when it changes. */
 export function setGppDisplayStatus(status: 'visible' | 'hidden' | 'disabled'): void {
-  if (apiState) {
+  if (apiState && apiState.displayStatus !== status) {
     apiState.displayStatus = status;
-  }
-}
-
-/** Set the signal status. */
-export function setGppSignalStatus(status: 'ready' | 'not ready'): void {
-  if (apiState) {
-    apiState.signalStatus = status;
+    notify(apiState, 'cmpDisplayStatus', status);
   }
 }
 
@@ -325,10 +289,7 @@ export function getGppString(): string {
   return apiState?.gppString ?? '';
 }
 
-/**
- * Check whether the GPP API is currently installed.
- * Useful for conditional logic in the banner.
- */
+/** Whether the GPP API is installed. */
 export function isGppApiInstalled(): boolean {
   return apiState !== null;
 }

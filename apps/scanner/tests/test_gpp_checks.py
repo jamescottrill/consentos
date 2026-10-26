@@ -86,10 +86,9 @@ def _usnat(opt_out: int, gpc: int | None = None) -> str:
     return core + "." + ("Y" if gpc else "Q") + "A"
 
 
-def gpp(gpp_string: str, supported=("usnat",)) -> dict:
+def gpp(gpp_string: str, supported=("7:usnat",)) -> dict:
     return {
-        "ping": {"cmpStatus": "loaded", "supportedAPIs": list(supported)},
-        "data": {"gppString": gpp_string},
+        "ping": {"cmpStatus": "loaded", "supportedAPIs": list(supported), "gppString": gpp_string}
     }
 
 
@@ -136,19 +135,28 @@ class TestGppChecks:
         assert checks(b=before(gpp=None))["before_consent.gpp_api"].status == "failed"
 
     def test_unanswered_ping_is_inconclusive(self):
-        b = before(gpp={"ping": {"timedOut": True}, "data": None})
+        b = before(gpp={"ping": {"timedOut": True}})
         assert checks(b=b)["before_consent.gpp_api"].status == "inconclusive"
 
     def test_missing_supported_section_fails(self):
-        b = before(gpp=gpp("", supported=["usca"]))
+        b = before(gpp=gpp("", supported=["8:usca"]))
         check = checks(b=b)["before_consent.gpp_api"]
         assert check.status == "failed"
         assert check.evidence == {"missing": ["usnat"]}
 
-    def test_prefixed_supported_apis_are_understood(self):
-        assert checks(b=before(gpp=gpp("", supported=["7:usnat"])))[
-            "before_consent.gpp_api"
-        ].status == ("passed")
+    def test_sections_without_their_ids_fail(self):
+        check = checks(b=before(gpp=gpp("", supported=["usnat"])))["before_consent.gpp_api"]
+        assert check.status == "failed"
+        assert check.evidence == {"wrong": ["usnat"]}
+        assert "7:usnat" in check.fix
+
+    def test_sections_with_the_wrong_id_fail(self):
+        check = checks(b=before(gpp=gpp("", supported=["8:usnat"])))["before_consent.gpp_api"]
+        assert check.evidence == {"wrong": ["8:usnat"]}
+
+    def test_other_sections_are_left_alone(self):
+        b = before(gpp=gpp("", supported=["7:usnat", "2:tcfeuv2", "usca"]))
+        assert checks(b=b)["before_consent.gpp_api"].status == "passed"
 
     def test_no_string_after_accept_fails(self):
         assert checks(a=chosen("after_accept", 2, gpp=gpp("")))["after_accept.gpp"].status == (

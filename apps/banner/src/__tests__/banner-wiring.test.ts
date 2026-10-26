@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { GppPingReturn } from '../gpp-api';
 import type { ConsentState, SiteConfig } from '../types';
 
 vi.mock('../shopify', () => ({ updateShopifyConsent: vi.fn() }));
@@ -71,6 +72,14 @@ function click(action: string): void {
   (root.querySelector(`[data-action="${action}"]`) as HTMLElement).click();
 }
 
+function gppPing(): GppPingReturn {
+  let ping: GppPingReturn | undefined;
+  window.__gpp!('ping', (data) => {
+    ping = data as GppPingReturn;
+  });
+  return ping!;
+}
+
 function consentPost(): Record<string, unknown> {
   const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/api/v1/consent/'));
   expect(call).toBeDefined();
@@ -112,6 +121,36 @@ describe('banner wiring', () => {
     const body = consentPost();
     expect(typeof body.gpp_string).toBe('string');
     expect((body.gpp_string as string).length).toBeGreaterThan(0);
+  });
+
+  it('shows the GPP display as visible until the visitor chooses', async () => {
+    await boot({ gpp_enabled: true, gpp_supported_apis: ['usnat'] });
+    expect(gppPing()).toMatchObject({ cmpDisplayStatus: 'visible', signalStatus: 'not ready' });
+    click('reject');
+    expect(gppPing()).toMatchObject({ cmpDisplayStatus: 'hidden', signalStatus: 'ready' });
+  });
+
+  it("gives __gpp a returning visitor's saved choices", async () => {
+    const { readConsent } = await import('../consent');
+    vi.mocked(readConsent).mockReturnValue({
+      accepted: ['necessary'],
+      rejected: ['marketing'],
+      visitorId: 'v1',
+      consentedAt: new Date().toISOString(),
+      bannerVersion: '1',
+      configVersion: 'cfg-1',
+      gpcDetected: true,
+    } as ConsentState);
+    await boot({ gpp_enabled: true, gpp_supported_apis: ['usnat'] });
+    const ping = gppPing();
+    expect(ping).toMatchObject({ cmpDisplayStatus: 'hidden', signalStatus: 'ready' });
+    expect(ping.gppString).not.toBe('');
+    // 1 is "opted out".
+    expect(ping.parsedSections.usnat).toEqual([
+      expect.objectContaining({ SaleOptOut: 1 }),
+      { SubsectionType: 1, Gpc: true },
+    ]);
+    vi.mocked(readConsent).mockReturnValue(null);
   });
 
   it('records the revision the visitor consented against', async () => {

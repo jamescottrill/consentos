@@ -742,6 +742,18 @@ Migration `0016` drops `gcm_default` from site, site group and organisation conf
 
 **Check now** also checks what happens when a visitor accepts or rejects, through the scanner's `POST /validate` endpoint, so upgrade the scanner with the API. Each check now reports passed, failed, inconclusive or not applicable. `POST /validate` takes the site's expected settings and returns a list of checks, replacing the old `pre_consent_issues`, `post_accept_issues`, `post_reject_issues` and `dark_pattern_issues` lists. Anything else calling `POST /validate` needs updating.
 
+### The GPP API follows GPP 1.1
+
+The banner's `__gpp` API now behaves as GPP 1.1 says, as its `gppVersion` already claimed. Vendor scripts written for 1.1 need no change. Anything on your sites that calls `__gpp` directly may:
+
+- `getGPPData` is gone. Read `gppString`, `parsedSections` and `sectionList` from `ping` instead.
+- `supportedAPIs` lists sections with their IDs, such as `7:usnat`, not `usnat`.
+- `parsedSections` and `getSection` key sections by API prefix (`usnat`), and each section is a list of sub-sections: the core fields, then the GPC sub-section where the section has one.
+- `getField` is new, for example `getField('usnat.SaleOptOut')`.
+- `applicableSections` is `[-1]` when no section applies, rather than empty.
+- `addEventListener` answers with a `listenerRegistered` event whose data is `true`. A choice is announced with `cmpDisplayStatus`, one `sectionChange` per section, then `signalStatus`.
+- A returning visitor's choices are available from `__gpp` as soon as the banner loads. Before, `__gpp` reported nothing until they chose again.
+
 ### Consent and cookie reports are checked against the site's domains
 
 Consent records and cookie reports are only accepted from the site's domain and its additional domains, including their subdomains. The API checks the request's `Origin` header (or `Referer` when `Origin` is absent or `null`) and, for cookie reports, the reported page URL. Requests from any other domain are rejected with `403`, and each rejection is logged at warning level with the site ID and the rejected host. Consent and cookie reports for inactive sites are rejected with `404`.
