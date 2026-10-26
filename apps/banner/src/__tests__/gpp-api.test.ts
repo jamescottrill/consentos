@@ -1,5 +1,5 @@
 /**
- * Tests for the GPP CMP API (__gpp() global function).
+ * Tests for the GPP 1.1 CMP API (__gpp() global function).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -8,58 +8,36 @@ import {
   removeGppApi,
   updateGppConsent,
   setGppDisplayStatus,
-  setGppSignalStatus,
   getGppString,
   isGppApiInstalled,
   type GppPingReturn,
-  type GppData,
   type GppEventData,
   type GppApiCallback,
 } from '../gpp-api';
-import {
-  type GppString,
-  createDefaultSectionData,
-  US_NATIONAL,
-  US_CALIFORNIA,
-  SECTION_REGISTRY,
-} from '../gpp';
-
-// Section IDs (US_NATIONAL and US_CALIFORNIA are SectionDef objects, not numbers)
-const US_NATIONAL_ID = US_NATIONAL.id; // 7
-const US_CALIFORNIA_ID = US_CALIFORNIA.id; // 8
+import { buildGppFromConsent } from '../gpp-consent';
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-/** Call __gpp and return the callback args as a promise. */
-function callGpp(
-  command: string,
-  parameter?: unknown,
-): Promise<{ data: unknown; success: boolean }> {
-  return new Promise((resolve) => {
-    window.__gpp!(command, (data: unknown, success: boolean) => {
-      resolve({ data, success });
-    }, parameter);
-  });
+/** Call __gpp and return the callback's arguments. __gpp answers at once. */
+function callGpp(command: string, parameter?: unknown): { data: unknown; success: boolean } {
+  let result: { data: unknown; success: boolean } | undefined;
+  window.__gpp!(
+    command,
+    (data: unknown, success: boolean) => {
+      result = { data, success };
+    },
+    parameter,
+  );
+  return result!;
 }
 
-/** Build a minimal GppString for testing. */
-function buildTestGpp(sectionIds: number[] = [US_NATIONAL_ID]): GppString {
-  const sections = new Map<number, { data: Record<string, number | number[]> }>();
-  for (const id of sectionIds) {
-    const def = SECTION_REGISTRY.get(id);
-    if (def) {
-      const data = createDefaultSectionData(def);
-      sections.set(id, { data });
-    }
-  }
-  return {
-    header: {
-      version: 1,
-      sectionIds,
-      applicableSections: sectionIds,
-    },
-    sections,
-  };
+function ping(): GppPingReturn {
+  return callGpp('ping').data as GppPingReturn;
+}
+
+/** The visitor rejected marketing, with GPC on. */
+function rejected(apis: string[] = ['usnat']) {
+  return buildGppFromConsent(['necessary'], apis, true);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -73,8 +51,6 @@ describe('GPP CMP API', () => {
     removeGppApi();
   });
 
-  // ── Installation ──────────────────────────────────────────────────
-
   describe('installGppApi / removeGppApi', () => {
     it('installs __gpp on window', () => {
       expect(window.__gpp).toBeUndefined();
@@ -83,419 +59,303 @@ describe('GPP CMP API', () => {
       expect(isGppApiInstalled()).toBe(true);
     });
 
-    it('removes __gpp from window', () => {
+    it('removes __gpp and its queue from window', () => {
+      window.__gppQueue = [['ping', vi.fn()]];
       installGppApi(42);
       removeGppApi();
       expect(window.__gpp).toBeUndefined();
+      expect(window.__gppQueue).toBeUndefined();
       expect(isGppApiInstalled()).toBe(false);
     });
-
-    it('clears __gppQueue on remove', () => {
-      (window as { __gppQueue?: unknown[] }).__gppQueue = [['ping', vi.fn()]];
-      installGppApi(42);
-      removeGppApi();
-      expect((window as { __gppQueue?: unknown[] }).__gppQueue).toBeUndefined();
-    });
   });
 
-  // ── ping command ──────────────────────────────────────────────────
-
-  describe('ping command', () => {
-    it('returns CMP metadata', async () => {
+  describe('ping', () => {
+    it('returns every 1.1 field before the visitor chooses', () => {
       installGppApi(42, ['usnat', 'usca']);
-      const { data, success } = await callGpp('ping');
+      const { data, success } = callGpp('ping');
       expect(success).toBe(true);
-
-      const ping = data as GppPingReturn;
-      expect(ping.gppVersion).toBe('1.1');
-      expect(ping.cmpStatus).toBe('loaded');
-      expect(ping.cmpDisplayStatus).toBe('hidden');
-      expect(ping.signalStatus).toBe('not ready');
-      expect(ping.supportedAPIs).toEqual(['usnat', 'usca']);
-      expect(ping.cmpId).toBe(42);
-      expect(ping.gppString).toBe('');
-      expect(ping.applicableSections).toEqual([]);
+      expect(data).toEqual({
+        gppVersion: '1.1',
+        cmpStatus: 'loaded',
+        cmpDisplayStatus: 'hidden',
+        signalStatus: 'not ready',
+        supportedAPIs: ['7:usnat', '8:usca'],
+        cmpId: 42,
+        sectionList: [],
+        applicableSections: [7, 8],
+        gppString: '',
+        parsedSections: {},
+      });
     });
 
-    it('reflects updated display status', async () => {
-      installGppApi(1);
-      setGppDisplayStatus('visible');
-      const { data } = await callGpp('ping');
-      expect((data as GppPingReturn).cmpDisplayStatus).toBe('visible');
+    it('lists supported sections in ID order and skips unknown prefixes', () => {
+      installGppApi(1, ['usca', 'nonexistent', 'usnat', 'usca']);
+      expect(ping().supportedAPIs).toEqual(['7:usnat', '8:usca']);
     });
 
-    it('reflects updated signal status', async () => {
-      installGppApi(1);
-      setGppSignalStatus('ready');
-      const { data } = await callGpp('ping');
-      expect((data as GppPingReturn).signalStatus).toBe('ready');
+    it('supports usnat when the site lists no sections, as the encoder does', () => {
+      installGppApi(1, []);
+      expect(ping().supportedAPIs).toEqual(['7:usnat']);
     });
 
-    it('includes GPP string after consent update', async () => {
-      installGppApi(1, ['usnat']);
-      const gpp = buildTestGpp();
-      const encoded = updateGppConsent(gpp);
-      expect(encoded).toBeTruthy();
+    it('reports [-1] when no section applies', () => {
+      installGppApi(1, ['nonexistent']);
+      expect(ping().applicableSections).toEqual([-1]);
+    });
 
-      const { data } = await callGpp('ping');
-      expect((data as GppPingReturn).gppString).toBe(encoded);
-      expect((data as GppPingReturn).applicableSections).toEqual([US_NATIONAL_ID]);
+    it('carries the consent state once the visitor chooses', () => {
+      installGppApi(1, ['usnat', 'usca']);
+      const encoded = updateGppConsent(rejected(['usnat', 'usca']));
+
+      const data = ping();
+      expect(data.signalStatus).toBe('ready');
+      expect(data.gppString).toBe(encoded);
+      expect(data.sectionList).toEqual([7, 8]);
+      expect(data.applicableSections).toEqual([7, 8]);
+      expect(Object.keys(data.parsedSections)).toEqual(['usnat', 'usca']);
     });
   });
 
-  // ── getGPPData command ────────────────────────────────────────────
+  describe('parsedSections', () => {
+    it('keys sections by API prefix, with the GPC sub-section after the core', () => {
+      installGppApi(1, ['usnat']);
+      updateGppConsent(rejected());
 
-  describe('getGPPData command', () => {
-    it('returns empty data before consent', async () => {
-      installGppApi(1);
-      const { data, success } = await callGpp('getGPPData');
-      expect(success).toBe(true);
-
-      const gppData = data as GppData;
-      expect(gppData.gppString).toBe('');
-      expect(gppData.applicableSections).toEqual([]);
-      expect(gppData.parsedSections).toEqual({});
+      const [core, gpc, ...rest] = ping().parsedSections.usnat;
+      expect(core).toMatchObject({ Version: 1, SaleOptOut: 1, SharingNotice: 1 });
+      expect(gpc).toEqual({ SubsectionType: 1, Gpc: true });
+      expect(rest).toEqual([]);
     });
 
-    it('returns populated data after consent update', async () => {
-      installGppApi(1, ['usnat']);
-      const gpp = buildTestGpp();
-      updateGppConsent(gpp);
-
-      const { data } = await callGpp('getGPPData');
-      const gppData = data as GppData;
-      expect(gppData.gppString).toBeTruthy();
-      expect(gppData.applicableSections).toEqual([US_NATIONAL_ID]);
-      expect(gppData.parsedSections[US_NATIONAL_ID]).toBeDefined();
+    it('has only the core for a section without a GPC sub-section', () => {
+      installGppApi(1, ['usva']);
+      updateGppConsent(rejected(['usva']));
+      expect(ping().parsedSections.usva).toHaveLength(1);
     });
   });
 
-  // ── getSection command ────────────────────────────────────────────
-
-  describe('getSection command', () => {
-    it('returns null for missing prefix', async () => {
-      installGppApi(1);
-      const { data, success } = await callGpp('getSection', 'usnat');
-      expect(success).toBe(false);
-      expect(data).toBeNull();
-    });
-
-    it('returns null when no parameter given', async () => {
-      installGppApi(1);
-      const { data, success } = await callGpp('getSection');
-      expect(success).toBe(false);
-      expect(data).toBeNull();
-    });
-
-    it('returns section data by API prefix', async () => {
+  describe('getGPPData', () => {
+    it('is gone, as in 1.1', () => {
       installGppApi(1, ['usnat']);
-      const gpp = buildTestGpp();
-      updateGppConsent(gpp);
-
-      const { data, success } = await callGpp('getSection', 'usnat');
-      expect(success).toBe(true);
-      expect(data).toBeDefined();
-      expect((data as Record<string, unknown>).Version).toBeDefined();
-    });
-
-    it('returns null for unregistered prefix', async () => {
-      installGppApi(1);
-      updateGppConsent(buildTestGpp());
-
-      const { data, success } = await callGpp('getSection', 'nonexistent');
-      expect(success).toBe(false);
-      expect(data).toBeNull();
+      expect(callGpp('getGPPData')).toEqual({ data: null, success: false });
     });
   });
 
-  // ── hasSection command ────────────────────────────────────────────
-
-  describe('hasSection command', () => {
-    it('returns false when section not present', async () => {
-      installGppApi(1);
-      const { data, success } = await callGpp('hasSection', 'usnat');
-      expect(success).toBe(true);
-      expect(data).toBe(false);
-    });
-
-    it('returns true when section present', async () => {
+  describe('getSection', () => {
+    it('returns the sub-sections for an API prefix', () => {
       installGppApi(1, ['usnat']);
-      updateGppConsent(buildTestGpp());
-
-      const { data, success } = await callGpp('hasSection', 'usnat');
+      updateGppConsent(rejected());
+      const { data, success } = callGpp('getSection', 'usnat');
       expect(success).toBe(true);
-      expect(data).toBe(true);
+      expect(data).toEqual(ping().parsedSections.usnat);
     });
 
-    it('returns false for empty parameter', async () => {
-      installGppApi(1);
-      const { data, success } = await callGpp('hasSection');
-      expect(success).toBe(true);
-      expect(data).toBe(false);
+    it('returns null before the visitor chooses', () => {
+      installGppApi(1, ['usnat']);
+      expect(callGpp('getSection', 'usnat')).toEqual({ data: null, success: false });
+    });
+
+    it('returns null for a missing or unknown prefix', () => {
+      installGppApi(1, ['usnat']);
+      updateGppConsent(rejected());
+      expect(callGpp('getSection')).toEqual({ data: null, success: false });
+      expect(callGpp('getSection', 'nonexistent')).toEqual({ data: null, success: false });
     });
   });
 
-  // ── addEventListener / removeEventListener ────────────────────────
-
-  describe('addEventListener', () => {
-    it('registers a listener and fires immediately', async () => {
+  describe('hasSection', () => {
+    it('is true only for a section in the GPP string', () => {
       installGppApi(1, ['usnat']);
+      expect(callGpp('hasSection', 'usnat')).toEqual({ data: false, success: true });
+      updateGppConsent(rejected());
+      expect(callGpp('hasSection', 'usnat')).toEqual({ data: true, success: true });
+      expect(callGpp('hasSection', 'usca')).toEqual({ data: false, success: true });
+      expect(callGpp('hasSection')).toEqual({ data: false, success: true });
+    });
+  });
 
-      const { data, success } = await callGpp('addEventListener');
-      expect(success).toBe(true);
-
-      const event = data as GppEventData;
-      expect(event.eventName).toBe('listenerRegistered');
-      expect(event.listenerId).toBe(1);
-      expect(event.pingData.cmpStatus).toBe('loaded');
+  describe('getField', () => {
+    it('returns a core field', () => {
+      installGppApi(1, ['usnat']);
+      updateGppConsent(rejected());
+      expect(callGpp('getField', 'usnat.SaleOptOut')).toEqual({ data: 1, success: true });
     });
 
-    it('assigns unique listener IDs', async () => {
-      installGppApi(1);
-
-      const { data: d1 } = await callGpp('addEventListener');
-      const { data: d2 } = await callGpp('addEventListener');
-
-      expect((d1 as GppEventData).listenerId).toBe(1);
-      expect((d2 as GppEventData).listenerId).toBe(2);
+    it('returns an array field', () => {
+      installGppApi(1, ['usnat']);
+      updateGppConsent(rejected());
+      const { data } = callGpp('getField', 'usnat.KnownChildSensitiveDataConsents');
+      expect(data).toEqual([0, 0]);
     });
 
-    it('notifies listeners on consent update', () => {
+    it('returns a GPC sub-section field', () => {
       installGppApi(1, ['usnat']);
+      updateGppConsent(rejected());
+      expect(callGpp('getField', 'usnat.Gpc')).toEqual({ data: true, success: true });
+    });
 
+    it('returns null for an unknown field, section or parameter', () => {
+      installGppApi(1, ['usnat']);
+      updateGppConsent(rejected());
+      expect(callGpp('getField', 'usnat.Nope')).toEqual({ data: null, success: false });
+      expect(callGpp('getField', 'usca.SaleOptOut')).toEqual({ data: null, success: false });
+      expect(callGpp('getField', 'usnat')).toEqual({ data: null, success: false });
+      expect(callGpp('getField')).toEqual({ data: null, success: false });
+    });
+  });
+
+  describe('event listeners', () => {
+    function listen(): GppEventData[] {
       const events: GppEventData[] = [];
       window.__gpp!('addEventListener', (data: unknown) => {
         events.push(data as GppEventData);
       });
+      return events;
+    }
 
-      // First event is listenerRegistered
+    it('answers addEventListener with listenerRegistered and true', () => {
+      installGppApi(1, ['usnat']);
+      const events = listen();
       expect(events).toHaveLength(1);
-      expect(events[0].eventName).toBe('listenerRegistered');
-
-      // Update consent — should fire signalStatus event
-      updateGppConsent(buildTestGpp());
-
-      expect(events).toHaveLength(2);
-      expect(events[1].eventName).toBe('signalStatus');
-      expect(events[1].data).toBeDefined();
-      expect((events[1].data as GppData).gppString).toBeTruthy();
+      expect(events[0]).toMatchObject({ eventName: 'listenerRegistered', listenerId: 1, data: true });
+      expect(events[0].pingData.cmpStatus).toBe('loaded');
     });
 
-    it('swallows errors thrown by listeners', () => {
+    it('assigns unique listener IDs', () => {
       installGppApi(1);
+      expect(listen()[0].listenerId).toBe(1);
+      expect(listen()[0].listenerId).toBe(2);
+    });
 
-      const throwingCallback: GppApiCallback = () => {
+    it('announces a choice with signalStatus last', () => {
+      installGppApi(1, ['usnat', 'usca']);
+      setGppDisplayStatus('visible');
+      const events = listen();
+
+      updateGppConsent(rejected(['usnat', 'usca']));
+
+      expect(events.slice(1).map((e) => [e.eventName, e.data])).toEqual([
+        ['cmpDisplayStatus', 'hidden'],
+        ['sectionChange', 'usnat'],
+        ['sectionChange', 'usca'],
+        ['signalStatus', 'ready'],
+      ]);
+      expect(events[events.length - 1].pingData.gppString).not.toBe('');
+    });
+
+    it('starts with signalStatus "not ready" when the visitor changes their choice', () => {
+      installGppApi(1, ['usnat']);
+      updateGppConsent(rejected());
+      const events = listen();
+
+      updateGppConsent(buildGppFromConsent(['necessary', 'marketing'], ['usnat'], false));
+
+      const names = events.slice(1).map((e) => [e.eventName, e.data]);
+      expect(names[0]).toEqual(['signalStatus', 'not ready']);
+      expect(names[names.length - 1]).toEqual(['signalStatus', 'ready']);
+    });
+
+    it('carries the state at the time in pingData', () => {
+      installGppApi(1, ['usnat']);
+      const events = listen();
+      updateGppConsent(rejected());
+      const sectionChange = events.find((e) => e.eventName === 'sectionChange')!;
+      expect(sectionChange.pingData.signalStatus).toBe('not ready');
+      expect(sectionChange.pingData.parsedSections.usnat).toBeDefined();
+    });
+
+    it('keeps telling other listeners when one throws', () => {
+      installGppApi(1, ['usnat']);
+      const throwing: GppApiCallback = () => {
         throw new Error('Listener error');
       };
-
-      // Should not throw
-      expect(() => {
-        window.__gpp!('addEventListener', throwingCallback);
-      }).not.toThrow();
-
-      // Should not throw during consent update either
-      expect(() => {
-        updateGppConsent(buildTestGpp());
-      }).not.toThrow();
+      expect(() => window.__gpp!('addEventListener', throwing)).not.toThrow();
+      const events = listen();
+      expect(() => updateGppConsent(rejected())).not.toThrow();
+      expect(events[events.length - 1].eventName).toBe('signalStatus');
     });
-  });
 
-  describe('removeEventListener', () => {
-    it('removes an existing listener', async () => {
+    it('answers removeEventListener with listenerRemoved', () => {
       installGppApi(1);
-
-      // Add listener
-      const { data } = await callGpp('addEventListener');
-      const listenerId = (data as GppEventData).listenerId;
-
-      // Remove it
-      const { data: removed, success } = await callGpp('removeEventListener', listenerId);
+      const listenerId = listen()[0].listenerId;
+      const { data, success } = callGpp('removeEventListener', listenerId);
       expect(success).toBe(true);
-      expect(removed).toBe(true);
+      expect(data).toMatchObject({ eventName: 'listenerRemoved', listenerId, data: true });
     });
 
-    it('returns false for non-existent listener', async () => {
+    it('reports false when removing a listener that does not exist', () => {
       installGppApi(1);
-      const { data, success } = await callGpp('removeEventListener', 999);
+      const { data, success } = callGpp('removeEventListener', 999);
       expect(success).toBe(false);
-      expect(data).toBe(false);
+      expect(data).toMatchObject({ eventName: 'listenerRemoved', data: false });
     });
 
-    it('stops notifications after removal', () => {
+    it('stops telling a removed listener', () => {
       installGppApi(1, ['usnat']);
-
-      const events: GppEventData[] = [];
-      let listenerId: number;
-
-      window.__gpp!('addEventListener', (data: unknown) => {
-        const event = data as GppEventData;
-        events.push(event);
-        listenerId = event.listenerId;
-      });
-
-      // Remove the listener
-      window.__gpp!('removeEventListener', (_d: unknown, _s: boolean) => {}, listenerId!);
-
-      // Update consent — should NOT fire to removed listener
-      const eventsBefore = events.length;
-      updateGppConsent(buildTestGpp());
-
-      expect(events.length).toBe(eventsBefore);
+      const events = listen();
+      callGpp('removeEventListener', events[0].listenerId);
+      updateGppConsent(rejected());
+      expect(events).toHaveLength(1);
     });
   });
 
-  // ── Unknown commands ──────────────────────────────────────────────
-
-  describe('unknown commands', () => {
-    it('returns false for unknown commands', async () => {
+  describe('setGppDisplayStatus', () => {
+    it('updates ping and tells listeners only when it changes', () => {
       installGppApi(1);
-      const { data, success } = await callGpp('unknownCommand');
-      expect(success).toBe(false);
-      expect(data).toBe(false);
+      const events: GppEventData[] = [];
+      window.__gpp!('addEventListener', (data: unknown) => events.push(data as GppEventData));
+
+      setGppDisplayStatus('visible');
+      setGppDisplayStatus('visible');
+      expect(ping().cmpDisplayStatus).toBe('visible');
+      expect(events.filter((e) => e.eventName === 'cmpDisplayStatus')).toHaveLength(1);
+    });
+
+    it('does nothing when the API is not installed', () => {
+      expect(() => setGppDisplayStatus('visible')).not.toThrow();
     });
   });
-
-  // ── Uninitialised state ───────────────────────────────────────────
-
-  describe('uninitialised state', () => {
-    it('returns false when API not installed', () => {
-      // Manually set __gpp to the handler without initialising state
-      // by calling removeGppApi first to clear state, then manually assigning
-      removeGppApi();
-
-      // Directly import and call the handler — simulate calling before install
-      let callbackData: unknown;
-      let callbackSuccess: boolean | undefined;
-
-      // We can't call __gpp because it's removed, but we can test via getGppString
-      expect(getGppString()).toBe('');
-      expect(isGppApiInstalled()).toBe(false);
-    });
-  });
-
-  // ── updateGppConsent ──────────────────────────────────────────────
 
   describe('updateGppConsent', () => {
-    it('returns the encoded GPP string', () => {
-      installGppApi(1, ['usnat']);
-      const gpp = buildTestGpp();
-      const result = updateGppConsent(gpp);
-      expect(result).toBeTruthy();
-      expect(typeof result).toBe('string');
-      // GPP strings start with 'D' (header prefix)
-      expect(result.startsWith('D')).toBe(true);
-    });
-
-    it('updates the gppString accessible via getGppString', () => {
-      installGppApi(1);
-      expect(getGppString()).toBe('');
-
-      updateGppConsent(buildTestGpp());
-      expect(getGppString()).toBeTruthy();
-    });
-
-    it('sets signalStatus to ready', async () => {
-      installGppApi(1);
-      updateGppConsent(buildTestGpp());
-
-      const { data } = await callGpp('ping');
-      expect((data as GppPingReturn).signalStatus).toBe('ready');
-    });
-
-    it('works with multiple sections', () => {
+    it('returns the encoded GPP string and keeps it', () => {
       installGppApi(1, ['usnat', 'usca']);
-      const gpp = buildTestGpp([US_NATIONAL_ID, US_CALIFORNIA_ID]);
-      const result = updateGppConsent(gpp);
-      expect(result).toBeTruthy();
+      const result = updateGppConsent(rejected(['usnat', 'usca']));
+      expect(result.startsWith('D')).toBe(true);
+      expect(result.split('~')).toHaveLength(3);
+      expect(getGppString()).toBe(result);
+    });
 
-      // Should contain ~ separator for sections
-      expect(result).toContain('~');
+    it('still encodes when the API is not installed', () => {
+      expect(updateGppConsent(rejected())).toBeTruthy();
+      expect(getGppString()).toBe('');
     });
   });
 
-  // ── Queue processing ──────────────────────────────────────────────
+  describe('unknown commands', () => {
+    it('fail', () => {
+      installGppApi(1);
+      expect(callGpp('unknownCommand')).toEqual({ data: null, success: false });
+    });
+  });
 
   describe('queue processing', () => {
-    it('processes queued calls on install', () => {
-      // Set up a queue before installing
-      const results: Array<{ data: unknown; success: boolean }> = [];
-      const cb = (data: unknown, success: boolean) => {
-        results.push({ data, success });
-      };
-
-      (window as { __gppQueue?: unknown[] }).__gppQueue = [
-        ['ping', cb],
-      ];
-
+    it('answers calls queued by the stub, then empties the queue', () => {
+      const cb = vi.fn();
+      window.__gppQueue = [['ping', cb]];
       installGppApi(1, ['usnat']);
-
-      // The queued ping should have been processed
-      expect(results).toHaveLength(1);
-      expect(results[0].success).toBe(true);
-      expect((results[0].data as GppPingReturn).cmpStatus).toBe('loaded');
-    });
-
-    it('clears the queue after processing', () => {
-      (window as { __gppQueue?: unknown[] }).__gppQueue = [
-        ['ping', vi.fn()],
-      ];
-
-      installGppApi(1);
-
-      expect((window as { __gppQueue?: unknown[] }).__gppQueue).toEqual([]);
+      expect(cb).toHaveBeenCalledWith(expect.objectContaining({ cmpStatus: 'loaded' }), true);
+      expect(window.__gppQueue).toEqual([]);
     });
   });
-
-  // ── Coexistence with __tcfapi ─────────────────────────────────────
 
   describe('coexistence', () => {
-    it('does not interfere with other window globals', () => {
-      // Set a mock __tcfapi
+    it('leaves __tcfapi alone', () => {
       const mockTcf = vi.fn();
       (window as { __tcfapi?: unknown }).__tcfapi = mockTcf;
-
       installGppApi(1);
-
-      // __tcfapi should still be intact
-      expect((window as { __tcfapi?: unknown }).__tcfapi).toBe(mockTcf);
-
       removeGppApi();
-
-      // __tcfapi should still be intact after removal
       expect((window as { __tcfapi?: unknown }).__tcfapi).toBe(mockTcf);
-
-      // Clean up
       delete (window as { __tcfapi?: unknown }).__tcfapi;
-    });
-  });
-
-  // ── setGppDisplayStatus / setGppSignalStatus ──────────────────────
-
-  describe('status setters', () => {
-    it('setGppDisplayStatus updates display status', async () => {
-      installGppApi(1);
-      setGppDisplayStatus('visible');
-
-      const { data } = await callGpp('ping');
-      expect((data as GppPingReturn).cmpDisplayStatus).toBe('visible');
-
-      setGppDisplayStatus('disabled');
-      const { data: d2 } = await callGpp('ping');
-      expect((d2 as GppPingReturn).cmpDisplayStatus).toBe('disabled');
-    });
-
-    it('setGppSignalStatus updates signal status', async () => {
-      installGppApi(1);
-      setGppSignalStatus('ready');
-
-      const { data } = await callGpp('ping');
-      expect((data as GppPingReturn).signalStatus).toBe('ready');
-    });
-
-    it('no-ops when API not installed', () => {
-      // Should not throw
-      expect(() => setGppDisplayStatus('visible')).not.toThrow();
-      expect(() => setGppSignalStatus('ready')).not.toThrow();
     });
   });
 });

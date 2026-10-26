@@ -203,8 +203,8 @@ document.cookie = 'session_id=1; path=/';
 let gppString = '';
 if (SETUP.gpp !== 'missing') {{
   window.__gpp = (command, callback) => {{
-    if (command === 'ping') callback({{ cmpStatus: 'loaded', supportedAPIs: ['usnat'] }}, true);
-    else if (command === 'getGPPData') callback({{ gppString }}, true);
+    if (command !== 'ping') return;
+    callback({{ cmpStatus: 'loaded', supportedAPIs: ['7:usnat'], gppString }}, true);
   }};
 }}
 </script>

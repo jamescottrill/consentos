@@ -139,11 +139,9 @@ async () => {
     ? await withTimeout(new Promise((resolve) => window.__tcfapi(
         'getTCData', 2, (data, success) => resolve({ success, data: data || null }))))
     : null;
+  // In GPP 1.1, ping carries the GPP string and parsed sections.
   const gpp = typeof window.__gpp === 'function'
-    ? {
-        ping: await withTimeout(new Promise((resolve) => window.__gpp('ping', resolve))),
-        data: await withTimeout(new Promise((resolve) => window.__gpp('getGPPData', resolve))),
-      }
+    ? { ping: await withTimeout(new Promise((resolve) => window.__gpp('ping', resolve))) }
     : null;
   return {
     consent: (window.__consentosCheck && window.__consentosCheck.consent) || [],

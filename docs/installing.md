@@ -89,7 +89,7 @@ When the banner appears, **Check now** also visits the page again in a fresh bro
 | Google receives the visitor's choice | Google's own requests reported a different consent state, in their `gcs` parameter, from the visitor's choice. Inconclusive when the page makes no Google requests. |
 | TCF reports no consent before the visitor chooses, and after Reject | The TCF API reported consent the visitor hadn't given. Only checked when TCF is on. |
 | TCF reports consent after Accept | The TCF API still reported no consent after Accept. Only checked when TCF is on. |
-| The GPP API responds | GPP is on, but `__gpp` is missing, hasn't loaded, or doesn't list the site's sections. Only checked when GPP is on, as are the two rows below. |
+| The GPP API responds | GPP is on, but `__gpp` is missing, hasn't loaded, or doesn't list the site's sections the GPP 1.1 way, with their section IDs (`7:usnat`). Only checked when GPP is on, as are the two rows below. |
 | Accept is recorded in the GPP string | After Accept, the GPP string was missing, didn't follow the GPP specification, had no section for one the site uses, or still said the visitor opted out. |
 | Reject is recorded in the GPP string | After Reject, the GPP string didn't say the visitor opted out of sale, sharing and targeted advertising. |
 | A Global Privacy Control signal is recorded | A visit with Global Privacy Control on wasn't noted in the saved choice, wasn't honoured when the site honours it everywhere, or didn't set the GPP string's GPC flag. Only checked when GPC is on. |
