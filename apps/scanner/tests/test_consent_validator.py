@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.consent_results import BannerObservation, ButtonLook
 from src.consent_validator import (
     CONSENT_COOKIE,
     Expectations,
@@ -46,8 +47,19 @@ def reject(**kwargs) -> PhaseObservation:
     )
 
 
+# A fair banner, measured before the choice and after Reject.
+BANNER = BannerObservation(
+    measured=True,
+    showing=True,
+    accept=ButtonLook(area=4000, font_size=14),
+    reject=ButtonLook(area=4000, font_size=14),
+    dismissed_by_scroll=False,
+    walled_after_reject=False,
+)
+
+
 def results(expect=EXPECT, b=None, a=None, r=None) -> dict[str, tuple[str, object]]:
-    checks = judge(expect, b or before(), a or accept(), r or reject())
+    checks = judge(expect, b or before(), a or accept(), r or reject(), banner=BANNER)
     return {c.key: (c.status, c) for c in checks}
 
 

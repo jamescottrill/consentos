@@ -96,6 +96,16 @@ When the banner appears, **Check now** also visits the page again in a fresh bro
 
 The GPP string is decoded independently of the banner, to the IAB GPP specification, so a string other parties would misread fails the check.
 
+Before choosing, it also checks the banner for dark patterns, designs that nudge visitors into accepting:
+
+| Check | What it means when it fails |
+| --- | --- |
+| The banner offers Reject alongside Accept | The banner showed Accept but no Reject button, often because the site's CSS hides it. |
+| Accept and Reject are equally prominent | A warning only: Accept is more than 1.5 times the size of Reject, or its text more than 1.3 times bigger. |
+| Optional categories start unticked | A category other than necessary was ticked before the visitor chose. Not checked where the site is opt-out or informational, since the banner ticks them on purpose there. |
+| Scrolling doesn't dismiss the banner | The banner disappeared when the page was scrolled. Scrolling isn't consent. |
+| The page can be used after Reject | After Reject, a full-screen layer still covered the page, or the page was locked in place: a cookie wall. |
+
 A check shows **Couldn't check** when it couldn't see what it needed: for example, when the page didn't load or the banner's Reject button couldn't be found. It never counts as passed. A cookie that hasn't been classified yet also makes its check inconclusive, because there's no way to tell whether it's allowed, so review new cookies on the **Cookies** tab. Checks for features the site doesn't use, such as TCF, aren't shown.
 
 A failed consent check marks the site **Problem found**, like a failed installation check.

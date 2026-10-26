@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 CheckStatus = Literal["passed", "failed", "inconclusive", "not_applicable"]
-Phase = Literal["before_consent", "after_accept", "after_reject", "with_gpc"]
+Phase = Literal["before_consent", "after_accept", "after_reject", "with_gpc", "banner"]
 
 
 @dataclass
@@ -54,6 +54,29 @@ class PhaseObservation:
     gpp: dict | None = None
     # The banner's saved choice, read from its consent cookie.
     consent_state: dict | None = None
+
+
+@dataclass
+class ButtonLook:
+    area: float
+    font_size: float
+
+
+@dataclass
+class BannerObservation:
+    """How the banner looked before the visitor chose, and the page after Reject."""
+
+    measured: bool = False
+    showing: bool = False
+    # The blocking mode the banner was served, when its config was seen.
+    blocking_mode: str | None = None
+    accept: ButtonLook | None = None
+    reject: ButtonLook | None = None
+    # Optional categories ticked before the visitor chose.
+    pre_ticked: list[str] = field(default_factory=list)
+    dismissed_by_scroll: bool | None = None
+    # Whether something still covered the page after Reject.
+    walled_after_reject: bool | None = None
 
 
 @dataclass

@@ -740,7 +740,7 @@ Migration `0016` drops `gcm_default` from site, site group and organisation conf
 
 ### Consent checks
 
-**Check now** also checks what happens when a visitor accepts or rejects, through the scanner's `POST /validate` endpoint, so upgrade the scanner with the API. Each check now reports passed, failed, inconclusive or not applicable. `POST /validate` takes the site's expected settings and returns a list of checks, replacing the old `pre_consent_issues`, `post_accept_issues`, `post_reject_issues` and `dark_pattern_issues` lists. Anything else calling `POST /validate` needs updating.
+**Check now** also checks what happens when a visitor accepts or rejects, through the scanner's `POST /validate` endpoint, so upgrade the scanner with the API. Each check now reports passed, failed, inconclusive or not applicable. `POST /validate` takes the site's expected settings and returns a list of checks, replacing the old `pre_consent_issues`, `post_accept_issues`, `post_reject_issues` and `dark_pattern_issues` lists. The dark-pattern checks now come back in that list, with the phase `banner`. Anything else calling `POST /validate` needs updating.
 
 ### The GPP API follows GPP 1.1
 

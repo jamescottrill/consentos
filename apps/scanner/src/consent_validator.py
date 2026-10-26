@@ -4,6 +4,7 @@ The page is loaded twice, each time in a fresh browser: once to look at
 it before any choice and then accept, and once to reject. Cookies,
 tracker requests and the consent signals the page exposes are recorded
 for each phase, then judged against what the site has switched on.
+Before the choice the banner is also checked for dark patterns.
 
 Every check reports one of four results. A check that couldn't observe
 what it needed is inconclusive, never passed, so a page that didn't load
@@ -22,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from src.consent_mode import consent_mode_checks
 from src.consent_results import (
+    BannerObservation,
     CheckResult,
     Expectations,
     ExpectedCookie,
@@ -30,10 +32,11 @@ from src.consent_results import (
     names,
     not_observed,
 )
+from src.dark_pattern_detector import dark_pattern_checks, measure_banner, measure_wall
 from src.gpp_checks import gpp_checks
 
 if TYPE_CHECKING:
-    from playwright.async_api import BrowserContext, Page
+    from playwright.async_api import BrowserContext, Page, Response
 
     from src.navigation import NavigationPolicy
 
@@ -41,6 +44,8 @@ logger = logging.getLogger(__name__)
 
 BANNER_HOST_SELECTOR = "#consentos-banner-host"
 CONSENT_COOKIE = "_consentos_consent"
+# The banner's config request, answered with the site's live config.
+CONFIG_PATH = "/geo-resolved"
 # Cookies the banner itself writes to remember the choice.
 OWN_COOKIES = frozenset({CONSENT_COOKIE, "euconsent-v2"})
 _EVIDENCE_LIMIT = 10
@@ -398,11 +403,13 @@ def judge(
     accept: PhaseObservation,
     reject: PhaseObservation,
     gpc: PhaseObservation | None = None,
+    banner: BannerObservation | None = None,
 ) -> list[CheckResult]:
     """Turn what each phase looked like into the site's consent checks.
 
     ``gpc`` is a visit with Global Privacy Control on, made only when the
-    site has GPC switched on.
+    site has GPC switched on. ``banner`` is how the banner looked, for
+    the dark-pattern checks.
     """
     consent_mode = consent_mode_checks(expect, before, accept, reject)
     gpp = gpp_checks(expect, before, accept, reject, gpc or PhaseObservation("with_gpc"))
@@ -412,6 +419,7 @@ def judge(
         *consent_mode["before_consent"],
         _tcf_check(before, expect, needs_click=False),
         *gpp["before_consent"],
+        *dark_pattern_checks(before, reject, banner or BannerObservation()),
         _saved_check(accept),
         *consent_mode["after_accept"],
         _tcf_check(accept, expect, needs_click=True),
@@ -439,13 +447,28 @@ class _Visit:
         self.phase: Phase = "before_consent"
         self.requests: dict[Phase, list[str]] = defaultdict(list)
         self.consent_state_requests: dict[Phase, list[str]] = defaultdict(list)
+        self.config_response: Response | None = None
         page.on("request", self._on_request)
+        page.on("response", self._on_response)
 
     def _on_request(self, request) -> None:  # noqa: ANN001
         if tracker_host(request.url):
             self.requests[self.phase].append(request.url)
         if carries_consent_state(request.url):
             self.consent_state_requests[self.phase].append(request.url)
+
+    def _on_response(self, response: Response) -> None:
+        if CONFIG_PATH in response.url:
+            self.config_response = response
+
+    async def blocking_mode(self) -> str | None:
+        """The blocking mode in the config the banner was served."""
+        if self.config_response is None:
+            return None
+        try:
+            return (await self.config_response.json()).get("blocking_mode")
+        except Exception:
+            return None
 
     async def choose(self, obs: PhaseObservation, selectors: tuple[str, ...]) -> None:
         """Make the visitor's choice, recording when on the page's clock."""
@@ -535,6 +558,7 @@ async def run_consent_checks(
     accept = PhaseObservation("after_accept")
     reject = PhaseObservation("after_reject")
     gpc = PhaseObservation("with_gpc")
+    banner = BannerObservation()
 
     async def new_visit(browser, *, send_gpc: bool = False) -> _Visit:  # noqa: ANN001
         context = await browser.new_context(
@@ -558,6 +582,12 @@ async def run_consent_checks(
                 await visit.observe(before)
                 accept.loaded, accept.banner_found = True, before.banner_found
                 if before.banner_found:
+                    await measure_banner(
+                        visit.page,
+                        banner,
+                        settle_ms=settle_ms,
+                        blocking_mode=await visit.blocking_mode(),
+                    )
                     await visit.choose(accept, _ACCEPT_SELECTORS)
                     if accept.clicked:
                         await visit.page.wait_for_timeout(settle_ms)
@@ -574,6 +604,7 @@ async def run_consent_checks(
                 if reject.clicked:
                     await visit.page.wait_for_timeout(settle_ms)
                     await visit.observe(reject)
+                    await measure_wall(visit.page, banner)
             await visit.context.close()
 
             if expect.gpc_enabled:
@@ -596,5 +627,5 @@ async def run_consent_checks(
         finally:
             await browser.close()
 
-    result.checks = judge(expect, before, accept, reject, gpc)
+    result.checks = judge(expect, before, accept, reject, gpc, banner)
     return result
