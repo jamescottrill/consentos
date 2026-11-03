@@ -23,6 +23,7 @@ from src.schemas.scanner import (
     DiffStatus,
     ScanDiffResponse,
 )
+from src.services.action_checks import ActionContext, ensure_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,10 @@ async def start_scan(
 
     Commits, so the worker can see the job as soon as it is dispatched.
     Raises ``ScanInProgressError`` if a scan is already pending or
-    running, and ``ScanDispatchError`` if the queue is unavailable.
+    running, ``ScanDispatchError`` if the queue is unavailable, and
+    ``ActionRefusedError`` if an action check refuses it.
     """
+    await ensure_allowed(db, ActionContext(None, "scan.start", site_id), lock=True)
     active = await db.execute(
         select(ScanJob).where(
             ScanJob.site_id == site_id,

@@ -15,9 +15,12 @@ from src.models.site_group import SiteGroup
 from src.models.site_group_config import SiteGroupConfig
 from src.schemas.auth import CurrentUser
 from src.schemas.site_group_config import SiteGroupConfigResponse, SiteGroupConfigUpdate
+from src.services.action_checks import guard_writes
 from src.services.dependencies import require_role
 
-router = APIRouter(prefix="/site-groups", tags=["site-groups"])
+router = APIRouter(
+    prefix="/site-groups", tags=["site-groups"], dependencies=[guard_writes("site_group")]
+)
 
 
 @router.get("/{group_id}/config", response_model=SiteGroupConfigResponse)

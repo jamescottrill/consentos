@@ -14,6 +14,7 @@ import { FormField } from '../components/ui/form-field';
 import { Input } from '../components/ui/input';
 import { LoadingState } from '../components/ui/loading-state';
 import { Select } from '../components/ui/select';
+import { refusedReason } from '../api/revisions';
 
 const GPP_SECTIONS = [
   { value: 'usnat', label: 'US National Privacy (Section 7)' },
@@ -448,7 +449,9 @@ export default function SiteGroupDetailPage() {
               </Button>
               {saved && <Alert variant="success" className="inline-flex w-auto p-2">Saved successfully</Alert>}
               {mutation.isError && (
-                <Alert variant="error" className="inline-flex w-auto p-2">Failed to save. Please try again.</Alert>
+                <Alert variant="error" className="inline-flex w-auto p-2">
+                  {refusedReason(mutation.error) ?? 'Failed to save. Please try again.'}
+                </Alert>
               )}
             </div>
           </form>

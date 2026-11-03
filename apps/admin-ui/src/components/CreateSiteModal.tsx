@@ -12,6 +12,7 @@ import { Input } from './ui/input.tsx';
 import { Select } from './ui/select.tsx';
 import { Button } from './ui/button.tsx';
 import { Alert } from './ui/alert.tsx';
+import { refusedReason } from '../api/revisions';
 
 interface Props {
   onClose: () => void;
@@ -58,8 +59,8 @@ export function CreateSiteForm({ onDone, onCancel, defaultGroupId }: FormProps) 
       // Straight to the new site, where its setup checklist starts.
       navigate(`/sites/${site.id}`);
     },
-    onError: () => {
-      setError('Failed to create site. Check the domain is unique.');
+    onError: (err) => {
+      setError(refusedReason(err) ?? 'Failed to create site. Check the domain is unique.');
     },
   });
 

@@ -13,6 +13,7 @@ import { Card } from './ui/card';
 import ScanProgress from './ScanProgress';
 import { LoadingState } from './ui/loading-state';
 import { Select } from './ui/select';
+import { refusedReason } from '../api/revisions';
 
 interface Props {
   siteId: string;
@@ -342,7 +343,8 @@ export default function SiteScannerTab({ siteId }: Props) {
 
       {triggerMutation.isError && (
         <Alert variant="error" className="mb-4">
-          Failed to trigger scan. A scan may already be in progress.
+          {refusedReason(triggerMutation.error) ??
+            'Failed to trigger scan. A scan may already be in progress.'}
         </Alert>
       )}
 

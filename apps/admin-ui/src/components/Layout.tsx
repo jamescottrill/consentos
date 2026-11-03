@@ -4,7 +4,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { getVersionInfo } from '../api/system';
 import { useAuthStore } from '../stores/auth';
-import { getNavItems } from '../extensions/registry';
+import { getLayoutNotices, getNavItems } from '../extensions/registry';
 import UpdateBanner from './UpdateBanner';
 
 const CORE_NAV_ITEMS = [
@@ -187,6 +187,9 @@ export default function Layout() {
       </header>
 
       {versionInfo && <UpdateBanner info={versionInfo} />}
+      {getLayoutNotices().map((Notice, i) => (
+        <Notice key={i} />
+      ))}
 
       {/* Main content */}
       <main className="w-full px-6 py-10 md:px-12">

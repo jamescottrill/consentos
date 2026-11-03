@@ -19,6 +19,7 @@ import { LoadingState } from './ui/loading-state';
 import { Modal } from './ui/modal';
 import { Select } from './ui/select';
 import { Textarea } from './ui/textarea';
+import { refusedReason } from '../api/revisions';
 
 /** The translation keys that the banner script expects. */
 const TRANSLATION_KEYS = [
@@ -302,7 +303,9 @@ function TranslationEditor({
         </Button>
         {saved && <span className="text-sm text-status-success-fg">Saved successfully</span>}
         {mutation.isError && (
-          <span className="text-sm text-status-error-fg">Failed to save. Please try again.</span>
+          <span className="text-sm text-status-error-fg">
+            {refusedReason(mutation.error) ?? 'Failed to save. Please try again.'}
+          </span>
         )}
       </div>
     </form>
@@ -336,8 +339,8 @@ function CreateTranslationModal({
       queryClient.invalidateQueries({ queryKey: ['sites', siteId, 'translations'] });
       onCreated(locale);
     },
-    onError: () => {
-      setError('Failed to create translation. The locale may already exist.');
+    onError: (err) => {
+      setError(refusedReason(err) ?? 'Failed to create translation. The locale may already exist.');
     },
   });
 

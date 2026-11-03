@@ -21,6 +21,12 @@ from src.schemas.site import (
     SiteResponse,
     SiteUpdate,
 )
+from src.services.action_checks import (
+    ActionContext,
+    ActionRefusedError,
+    ensure_allowed,
+    guard_writes,
+)
 from src.services.config_layers import get_site_group_id, load_group_defaults, load_org_defaults
 from src.services.config_resolver import orm_to_config_dict, resolve_config
 from src.services.dependencies import require_role
@@ -31,7 +37,7 @@ from src.services.scanner import (
     start_scan,
 )
 
-router = APIRouter(prefix="/sites", tags=["sites"])
+router = APIRouter(prefix="/sites", tags=["sites"], dependencies=[guard_writes("site")])
 
 
 # ── Site CRUD ────────────────────────────────────────────────────────
@@ -44,6 +50,7 @@ async def create_site(
     db: AsyncSession = Depends(get_db),
 ) -> Site:
     """Create a new site within the current organisation."""
+    await ensure_allowed(db, ActionContext(current_user.organisation_id, "site.create"), lock=True)
     # Check domain uniqueness within the org
     existing = await db.execute(
         select(Site).where(
@@ -95,6 +102,8 @@ async def _start_first_scan(db: AsyncSession, site_id: uuid.UUID) -> None:
             trigger=ScanTrigger.INITIAL,
             max_pages=await configured_max_pages(db, site_id),
         )
+    except ActionRefusedError:
+        pass
     except ScanDispatchError as exc:
         await complete_scan_job(db, exc.job, error_message="The scanner couldn't be started")
         await db.commit()

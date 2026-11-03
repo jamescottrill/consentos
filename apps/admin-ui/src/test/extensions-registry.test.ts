@@ -15,6 +15,15 @@ describe('UI extension registry', () => {
     registry = await import(modulePath);
   });
 
+  describe('getLayoutNotices', () => {
+    it('returns each registered notice once', () => {
+      const Notice = () => null;
+      registry.registerLayoutNotice(Notice);
+      registry.registerLayoutNotice(Notice);
+      expect(registry.getLayoutNotices()).toEqual([Notice]);
+    });
+  });
+
   describe('getSiteDetailTabs', () => {
     it('returns empty array when no tabs registered', () => {
       expect(registry.getSiteDetailTabs()).toEqual([]);

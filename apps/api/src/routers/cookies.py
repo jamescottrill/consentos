@@ -28,6 +28,7 @@ from src.schemas.cookie import (
     ReviewStatus,
 )
 from src.schemas.validators import validate_regex_pattern
+from src.services.action_checks import guard_writes
 from src.services.classification import classify_single_cookie, classify_site_cookies
 from src.services.dependencies import get_current_user, require_role, require_superuser
 
@@ -108,6 +109,7 @@ async def list_cookies(
 
 @router.post(
     "/sites/{site_id}",
+    dependencies=[guard_writes("site")],
     response_model=CookieResponse,
     status_code=status.HTTP_201_CREATED,
 )
@@ -207,6 +209,7 @@ async def list_allow_list(
 
 @router.post(
     "/sites/{site_id}/allow-list",
+    dependencies=[guard_writes("site")],
     response_model=AllowListEntryResponse,
     status_code=status.HTTP_201_CREATED,
 )
@@ -243,6 +246,7 @@ async def create_allow_list_entry(
 
 @router.patch(
     "/sites/{site_id}/allow-list/{entry_id}",
+    dependencies=[guard_writes("site")],
     response_model=AllowListEntryResponse,
 )
 async def update_allow_list_entry(
@@ -295,6 +299,7 @@ async def update_allow_list_entry(
 
 @router.delete(
     "/sites/{site_id}/allow-list/{entry_id}",
+    dependencies=[guard_writes("site")],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_allow_list_entry(
@@ -348,7 +353,11 @@ async def get_cookie(
     return cookie
 
 
-@router.patch("/sites/{site_id}/{cookie_id}", response_model=CookieResponse)
+@router.patch(
+    "/sites/{site_id}/{cookie_id}",
+    response_model=CookieResponse,
+    dependencies=[guard_writes("site")],
+)
 async def update_cookie(
     site_id: uuid.UUID,
     cookie_id: uuid.UUID,
@@ -394,6 +403,7 @@ async def update_cookie(
 
 @router.delete(
     "/sites/{site_id}/{cookie_id}",
+    dependencies=[guard_writes("site")],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_cookie(
@@ -553,6 +563,7 @@ async def delete_known_cookie(
 
 @router.post(
     "/sites/{site_id}/classify",
+    dependencies=[guard_writes("site")],
     response_model=ClassifySiteResponse,
 )
 async def classify_cookies(

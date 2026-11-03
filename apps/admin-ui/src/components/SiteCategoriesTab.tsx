@@ -9,6 +9,7 @@ import { ALL_COOKIE_CATEGORIES } from '../types/api';
 import { Alert } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
+import { refusedReason } from '../api/revisions';
 
 interface Props {
   siteId: string;
@@ -157,7 +158,8 @@ export default function SiteCategoriesTab({ siteId, config }: Props) {
       {saved && <Alert variant="success">Categories saved.</Alert>}
       {mutation.isError && (
         <Alert variant="error">
-          Couldn&rsquo;t save: {(mutation.error as Error)?.message ?? 'unknown error'}
+          Couldn&rsquo;t save:{' '}
+          {refusedReason(mutation.error) ?? (mutation.error as Error)?.message ?? 'unknown error'}
         </Alert>
       )}
 

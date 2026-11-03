@@ -18,6 +18,7 @@ import { Alert } from '../components/ui/alert.tsx';
 import { EmptyState } from '../components/ui/empty-state.tsx';
 import { LoadingState } from '../components/ui/loading-state.tsx';
 import type { InstallationSummary, Site, SiteGroup, SiteSetupSummary } from '../types/api';
+import { refusedReason } from '../api/revisions';
 
 export default function SitesPage() {
   const queryClient = useQueryClient();
@@ -43,8 +44,8 @@ export default function SitesPage() {
       setNewGroupName('');
       setCreateGroupError('');
     },
-    onError: () => {
-      setCreateGroupError('Failed to create group. Name may already exist.');
+    onError: (err) => {
+      setCreateGroupError(refusedReason(err) ?? 'Failed to create group. Name may already exist.');
     },
   });
 

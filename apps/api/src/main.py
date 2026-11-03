@@ -1,8 +1,9 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.config.edition import edition_name
 from src.config.logging import setup_logging
@@ -32,6 +33,7 @@ from src.routers import (
     translations,
     users,
 )
+from src.services.action_checks import ActionRefusedError
 
 
 @asynccontextmanager
@@ -132,6 +134,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(ActionRefusedError)
+    async def _action_refused(_request: Request, exc: ActionRefusedError) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": str(exc), "code": "action_refused"})
 
     # Core routers
     api_prefix = "/api/v1"

@@ -96,13 +96,20 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
   return typeof detail === 'string' ? detail : fallback;
 }
 
+/** The reason an extension refused the action, if that is why it failed. */
+export function refusedReason(error: unknown): string | undefined {
+  const data = (error as { response?: { data?: { code?: string; detail?: string } } })?.response
+    ?.data;
+  return data?.code === 'action_refused' ? data.detail : undefined;
+}
+
 /**
  * Like ``apiErrorMessage``, but a refusal for lack of permission gets a
  * clear explanation instead of the API's role check wording.
  */
 export function publishErrorMessage(error: unknown, fallback: string): string {
   const status = (error as { response?: { status?: number } })?.response?.status;
-  if (status === 403) {
+  if (status === 403 && !refusedReason(error)) {
     return 'Only owners and admins can publish, roll back or discard changes.';
   }
   return apiErrorMessage(error, fallback);

@@ -10,9 +10,12 @@ from src.models.site import Site
 from src.models.site_group import SiteGroup
 from src.schemas.auth import CurrentUser
 from src.schemas.site_group import SiteGroupCreate, SiteGroupResponse, SiteGroupUpdate
+from src.services.action_checks import guard_writes
 from src.services.dependencies import require_role
 
-router = APIRouter(prefix="/site-groups", tags=["site-groups"])
+router = APIRouter(
+    prefix="/site-groups", tags=["site-groups"], dependencies=[guard_writes("site_group")]
+)
 
 
 @router.post("/", response_model=SiteGroupResponse, status_code=status.HTTP_201_CREATED)

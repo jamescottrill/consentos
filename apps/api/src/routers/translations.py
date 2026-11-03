@@ -14,9 +14,14 @@ from src.models.site import Site
 from src.models.translation import Translation
 from src.schemas.auth import CurrentUser
 from src.schemas.translation import TranslationCreate, TranslationResponse, TranslationUpdate
+from src.services.action_checks import guard_writes
 from src.services.dependencies import require_role
 
-router = APIRouter(prefix="/sites/{site_id}/translations", tags=["translations"])
+router = APIRouter(
+    prefix="/sites/{site_id}/translations",
+    tags=["translations"],
+    dependencies=[guard_writes("site")],
+)
 
 
 async def _get_org_site(site_id: uuid.UUID, organisation_id: uuid.UUID, db: AsyncSession) -> Site:

@@ -275,6 +275,7 @@ def check_scheduled_scans() -> dict:
 
     from src.config.settings import get_settings
     from src.schemas.scanner import ScanTrigger
+    from src.services.action_checks import ActionRefusedError
     from src.services.scanner import (
         ScanDispatchError,
         ScanInProgressError,
@@ -289,25 +290,31 @@ def check_scheduled_scans() -> dict:
         engine = create_async_engine(settings.database_url, echo=False)
         async with AsyncSession(engine, expire_on_commit=False) as db:
             try:
-                sites = await get_sites_due_for_scan(db)
+                # Plain ids: a rollback below expires any loaded Site rows.
+                site_ids = [site.id for site in await get_sites_due_for_scan(db)]
                 triggered = 0
 
-                for site in sites:
+                for site_id in site_ids:
                     try:
                         await start_scan(
                             db,
-                            site_id=site.id,
+                            site_id=site_id,
                             trigger=ScanTrigger.SCHEDULED,
-                            max_pages=await configured_max_pages(db, site.id),
+                            max_pages=await configured_max_pages(db, site_id),
                         )
                     except ScanInProgressError:
+                        await db.rollback()  # releases the organisation lock
+                        continue
+                    except ActionRefusedError as exc:
+                        await db.rollback()
+                        logger.info("Scheduled scan for site %s refused: %s", site_id, exc)
                         continue
                     except ScanDispatchError:
                         # Left pending: recover_stale_scans re-dispatches it.
                         continue
                     triggered += 1
 
-                return {"sites_checked": len(sites), "scans_triggered": triggered}
+                return {"sites_checked": len(site_ids), "scans_triggered": triggered}
             except Exception:
                 await db.rollback()
                 raise

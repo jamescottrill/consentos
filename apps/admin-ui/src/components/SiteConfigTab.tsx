@@ -15,6 +15,7 @@ import { FormField } from './ui/form-field';
 import { InfoTooltip } from './ui/info-tooltip';
 import { Input } from './ui/input';
 import { Select } from './ui/select';
+import { refusedReason } from '../api/revisions';
 
 interface Props {
   siteId: string;
@@ -631,7 +632,9 @@ export default function SiteConfigTab({ siteId, config }: Props) {
         )}
         {saved && <Alert variant="success" className="inline-flex w-auto p-2">Saved successfully</Alert>}
         {mutation.isError && (
-          <Alert variant="error" className="inline-flex w-auto p-2">Failed to save. Please try again.</Alert>
+          <Alert variant="error" className="inline-flex w-auto p-2">
+            {refusedReason(mutation.error) ?? 'Failed to save. Please try again.'}
+          </Alert>
         )}
       </div>
     </form>

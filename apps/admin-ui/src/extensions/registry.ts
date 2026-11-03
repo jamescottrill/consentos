@@ -92,6 +92,7 @@ export interface AuthUiProvider {
 const _tabs: TabExtension[] = [];
 const _pages: PageExtension[] = [];
 const _navItems: NavExtension[] = [];
+const _layoutNotices: ComponentType[] = [];
 let _authProvider: AuthUiProvider | null = null;
 
 /* ------------------------------------------------------------------ */
@@ -116,6 +117,13 @@ export function registerPage(page: PageExtension): void {
 export function registerNavItem(item: NavExtension): void {
   if (!_navItems.some((n) => n.path === item.path)) {
     _navItems.push(item);
+  }
+}
+
+/** Register a component shown above every page, for example a notice bar. */
+export function registerLayoutNotice(component: ComponentType): void {
+  if (!_layoutNotices.includes(component)) {
+    _layoutNotices.push(component);
   }
 }
 
@@ -152,6 +160,11 @@ export function getPages(): readonly PageExtension[] {
 /** Return all registered nav items, sorted by order. */
 export function getNavItems(): readonly NavExtension[] {
   return [..._navItems].sort((a, b) => (a.order ?? 200) - (b.order ?? 200));
+}
+
+/** Return all registered layout notices. */
+export function getLayoutNotices(): readonly ComponentType[] {
+  return [..._layoutNotices];
 }
 
 /** Return the registered auth provider, or null for the default flow. */

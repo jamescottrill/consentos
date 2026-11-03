@@ -65,6 +65,7 @@ class ExtensionRegistry:
     config_enrichers: list[Callable] = field(default_factory=list)
     consent_record_hooks: list[Callable] = field(default_factory=list)
     pre_publish_checks: list[Callable] = field(default_factory=list)
+    action_checks: list[Callable] = field(default_factory=list)
     post_publish_hooks: list[Callable] = field(default_factory=list)
     config_source_providers: list[Callable] = field(default_factory=list)
     auth_provider: AuthProvider | None = None
@@ -226,6 +227,16 @@ def register_pre_publish_check(check: Callable) -> None:
     and the reason is shown to the user and kept in the publish log.
     """
     _registry.add_pre_publish_check(check)
+
+
+def register_action_check(check: Callable) -> None:
+    """Register a check that can refuse an admin action.
+
+    The callable signature is ``async (db: AsyncSession, ctx: ActionContext) -> str | None``
+    (see ``src.services.action_checks``). Return ``None`` to allow the
+    action, or a plain-language reason to refuse it with a 403.
+    """
+    _registry.action_checks.append(check)
 
 
 def register_post_publish_hook(hook: Callable) -> None:

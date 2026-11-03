@@ -12,9 +12,12 @@ from src.db import get_db
 from src.models.org_config import OrgConfig
 from src.schemas.auth import CurrentUser
 from src.schemas.org_config import OrgConfigResponse, OrgConfigUpdate
+from src.services.action_checks import guard_writes
 from src.services.dependencies import require_role
 
-router = APIRouter(prefix="/org-config", tags=["organisations"])
+router = APIRouter(
+    prefix="/org-config", tags=["organisations"], dependencies=[guard_writes("org_config")]
+)
 
 
 @router.get("/", response_model=OrgConfigResponse)

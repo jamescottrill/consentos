@@ -11,6 +11,7 @@ import { Alert } from './ui/alert.tsx';
 import { Select } from './ui/select.tsx';
 import { TabGroup } from './ui/tab-group.tsx';
 import BannerPreview from './BannerPreview';
+import { refusedReason } from '../api/revisions';
 
 type DisplayMode = 'bottom_banner' | 'top_banner' | 'overlay' | 'corner_popup';
 type CornerPosition = 'left' | 'right';
@@ -454,7 +455,11 @@ export default function BannerBuilderTab({ configQueryKey, config, onSave, siteD
           </Button>
         </div>
         {saved && <Alert variant="success">Saved successfully</Alert>}
-        {mutation.isError && <Alert variant="error">Failed to save. Please try again.</Alert>}
+        {mutation.isError && (
+          <Alert variant="error">
+            {refusedReason(mutation.error) ?? 'Failed to save. Please try again.'}
+          </Alert>
+        )}
       </div>
 
       {/* Right panel — preview */}

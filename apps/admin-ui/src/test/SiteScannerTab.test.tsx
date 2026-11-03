@@ -211,4 +211,16 @@ describe('SiteScannerTab', () => {
     expect(screen.getByText('First scan')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Trigger Scan' })).toBeDisabled();
   });
+
+  it("shows an extension's reason when a scan is refused", async () => {
+    mockListScans.mockResolvedValue([]);
+    mockTriggerScan.mockRejectedValue({
+      response: { status: 403, data: { detail: 'Scans are paused', code: 'action_refused' } },
+    });
+    renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Trigger Scan' }));
+
+    expect(await screen.findByText('Scans are paused')).toBeInTheDocument();
+  });
 });
